@@ -41,6 +41,8 @@ def hoje_br() -> date:
 LOGIN_USUARIO = "AD Vistoria"
 LOGIN_SENHA = "55496449100084"
 
+TIPOS_VISTORIA_OPCOES = ["Cautelar", "Sinistro", "Seguro", "Outra"]
+
 MESES_PT = {
     1: "Janeiro",
     2: "Fevereiro",
@@ -56,6 +58,16 @@ MESES_PT = {
     12: "Dezembro",
 }
 
+DIAS_SEMANA_COMPLETO = [
+    "Segunda-feira",
+    "Terça-feira",
+    "Quarta-feira",
+    "Quinta-feira",
+    "Sexta-feira",
+    "Sábado",
+    "Domingo",
+]
+
 
 # =========================================================
 # ESTADO INICIAL DA SESSÃO
@@ -68,8 +80,10 @@ if "pagina" not in st.session_state:
     st.session_state.pagina = "Agenda"
 if "os_importada" not in st.session_state:
     st.session_state.os_importada = None
-if "tipo_vistoria_os" not in st.session_state:
-    st.session_state.tipo_vistoria_os = "Nova"
+if "modalidade_os" not in st.session_state:
+    st.session_state.modalidade_os = "Nova"
+if "os_subaba" not in st.session_state:
+    st.session_state.os_subaba = "OS do Dia"
 if "fin_mes" not in st.session_state:
     st.session_state.fin_mes = hoje_br().month
 if "fin_ano" not in st.session_state:
@@ -98,6 +112,7 @@ def aplicar_tema(modo: str):
         cores = {
             "bg": "#0F1117",
             "surface": "#191C26",
+            "surface_soft": "#151822",
             "border": "#2E3345",
             "text": "#F3F4F6",
             "muted": "#9CA3AF",
@@ -127,6 +142,7 @@ def aplicar_tema(modo: str):
         cores = {
             "bg": "#F4F5F7",
             "surface": "#FFFFFF",
+            "surface_soft": "#F9FAFB",
             "border": "#E5E7EB",
             "text": "#1F2937",
             "muted": "#6B7280",
@@ -159,6 +175,7 @@ def aplicar_tema(modo: str):
         :root {{
             --bg: {cores['bg']};
             --surface: {cores['surface']};
+            --surface-soft: {cores['surface_soft']};
             --border: {cores['border']};
             --text: {cores['text']};
             --muted: {cores['muted']};
@@ -258,6 +275,40 @@ def aplicar_tema(modo: str):
             padding: 15px 18px;
             margin-bottom: 10px;
             box-shadow: var(--shadow);
+        }}
+        .cv-card-booked {{
+            background: var(--surface);
+            border: 1px solid var(--purple-soft-border);
+            border-left: 5px solid var(--purple);
+            border-radius: 14px;
+            padding: 14px 16px;
+            margin-bottom: 8px;
+            box-shadow: var(--shadow);
+        }}
+        .cv-slot-free {{
+            background: var(--surface-soft);
+            border: 1px dashed var(--border);
+            border-radius: 10px;
+            padding: 7px 14px;
+            margin-bottom: 6px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: var(--muted);
+            font-size: 0.86rem;
+        }}
+        .cv-slot-free-tag {{
+            font-size: 0.76rem;
+            font-weight: 600;
+            opacity: 0.85;
+        }}
+        .cv-day-summary {{
+            background: var(--purple-soft-bg);
+            border: 1px solid var(--purple-soft-border);
+            border-radius: 14px;
+            padding: 12px 16px;
+            margin: 10px 0 14px 0;
+            color: var(--purple-soft-text);
         }}
         .cv-card-title {{
             font-weight: 700;
@@ -596,6 +647,28 @@ def parse_hora(hora_str: str) -> time:
         return time(9, 0)
 
 
+def extrair_hora_int(hora_str: str) -> int:
+    try:
+        return int(str(hora_str or "08:00").split(":")[0])
+    except (ValueError, IndexError, TypeError):
+        return 8
+
+
+def parse_tipos_empresa(texto: str) -> list:
+    if not texto:
+        return ["Cautelar"]
+    partes = [p.strip() for p in str(texto).split(",") if p.strip() in TIPOS_VISTORIA_OPCOES]
+    return partes if partes else ["Cautelar"]
+
+
+def extrair_categoria_os(texto: str) -> str:
+    t = str(texto or "")
+    for op in TIPOS_VISTORIA_OPCOES:
+        if op.lower() in t.lower():
+            return op
+    return "Cautelar"
+
+
 def link_whatsapp(telefone: str, mensagem: str = "") -> str:
     digitos = re.sub(r"\D", "", str(telefone or ""))
     if not digitos:
@@ -629,6 +702,25 @@ def mostrar_aviso_pendente():
     if st.session_state.aviso_sucesso:
         st.success(st.session_state.aviso_sucesso)
         st.session_state.aviso_sucesso = None
+
+
+def iniciar_os_a_partir_agendamento(ag: dict, mapa_empresas: dict):
+    emp_nome = ag.get("empresa_nome", "")
+    emp_info = mapa_empresas.get(emp_nome, {})
+    tipos_emp = parse_tipos_empresa(emp_info.get("tipo_vistoria"))
+    st.session_state.os_importada = {
+        "agendamento_id": ag["id"],
+        "empresa_nome": emp_nome,
+        "cliente_nome": ag.get("cliente_nome", ""),
+        "veiculo": ag.get("veiculo", ""),
+        "placa": ag.get("placa", ""),
+        "data_vistoria": ag.get("data_agendamento", hoje_br().isoformat()),
+        "valor_padrao": float(emp_info.get("valor_padrao") or 0.0),
+        "tipo_padrao": tipos_emp[0],
+    }
+    st.session_state.form_os_ver += 1
+    st.session_state.pagina = "Ordem de Serviço"
+    st.rerun()
 
 
 # =========================================================
@@ -670,8 +762,124 @@ def carregar_vistorias(ano=None, mes=None):
 
 
 # =========================================================
-# FORMULÁRIO REUTILIZÁVEL DE EDIÇÃO / EXCLUSÃO DE OS
+# COMPONENTES REUTILIZÁVEIS (CARD AGENDAMENTO / EDITOR OS)
 # =========================================================
+def render_card_agendamento(ag: dict, mapa_empresas: dict, nomes_empresas: list, prefixo: str, mostrar_data=False):
+    emp_nome = ag.get("empresa_nome", "")
+    badge_cls = "cv-badge-red" if "AD " in emp_nome.upper() else "cv-badge-purple"
+    concluida = ag.get("status") == "Concluida"
+    ver = st.session_state.form_ag_ver
+
+    msg_wa = (
+        f"Olá {ag.get('cliente_nome', '')}, tudo bem? "
+        f"Confirmando sua vistoria do veículo {ag.get('veiculo', '')} "
+        f"(Placa {ag.get('placa', '')}) em {fmt_data_br(ag.get('data_agendamento'))} às {ag.get('hora_agendamento', '')}."
+    )
+    wa_url = link_whatsapp(ag.get("cliente_whatsapp", ""), msg_wa)
+    wa_html = f'<a class="wa-btn" href="{wa_url}" target="_blank">💬 WhatsApp</a>' if wa_url else ""
+
+    status_badge = (
+        '<span class="cv-badge-green">✅ Concluída</span>'
+        if concluida
+        else '<span class="cv-badge-purple">✔ Preenchido</span>'
+    )
+    topo_tempo = (
+        f"📅 {fmt_data_br(ag.get('data_agendamento'))} • ⏰ {ag.get('hora_agendamento', '')}"
+        if mostrar_data
+        else f"⏰ {ag.get('hora_agendamento', '')}"
+    )
+
+    card_cls = "cv-card-green" if concluida else "cv-card-booked"
+    title_cls = "cv-card-green-title" if concluida else "cv-card-title"
+    sub_cls = "cv-card-green-sub" if concluida else "cv-card-sub"
+
+    st.markdown(
+        f"""
+        <div class="{card_cls}">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:6px;">
+                <span style="font-size:0.88rem;font-weight:700;">{topo_tempo} &nbsp;{status_badge}</span>
+                <span class="{badge_cls}">{emp_nome}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+                <div>
+                    <div class="{title_cls}">
+                        {ag.get('veiculo', '')} • Placa: {ag.get('placa', '')}
+                    </div>
+                    <div class="{sub_cls}">
+                        👤 {ag.get('cliente_nome', '')} • 📞 {ag.get('cliente_whatsapp') or 'Não informado'}
+                    </div>
+                </div>
+                <div>{wa_html}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if not concluida:
+        bc1, bc2 = st.columns([4, 1])
+        with bc1:
+            if st.button(
+                "📋 Abrir Ordem de Serviço",
+                key=f"{prefixo}_iniciar_{ag['id']}",
+                type="primary",
+                use_container_width=True,
+            ):
+                iniciar_os_a_partir_agendamento(ag, mapa_empresas)
+        with bc2:
+            if st.button("🗑️", key=f"{prefixo}_del_{ag['id']}", help="Remover agendamento", use_container_width=True):
+                supabase.table("agendamentos").delete().eq("id", ag["id"]).execute()
+                st.session_state.aviso_sucesso = "Agendamento removido."
+                st.rerun()
+
+        with st.expander(f"✏️ Corrigir agendamento — {ag.get('hora_agendamento', '')} • {ag.get('veiculo', '')}"):
+            opcoes_ag_emp = sorted({e for e in (nomes_empresas + [emp_nome]) if e})
+            with st.form(f"{prefixo}_edit_ag_{ag['id']}_{ver}"):
+                if opcoes_ag_emp:
+                    idx_ae = opcoes_ag_emp.index(emp_nome) if emp_nome in opcoes_ag_emp else 0
+                    ea_emp = st.selectbox("Empresa", opcoes_ag_emp, index=idx_ae)
+                else:
+                    ea_emp = st.text_input("Empresa", value=emp_nome)
+
+                ac1, ac2 = st.columns(2)
+                with ac1:
+                    ea_cli = st.text_input("Cliente", value=ag.get("cliente_nome") or "")
+                with ac2:
+                    ea_wa = st.text_input("WhatsApp do Cliente", value=ag.get("cliente_whatsapp") or "")
+
+                av1, av2 = st.columns([2, 1])
+                with av1:
+                    ea_veic = st.text_input("Veículo", value=ag.get("veiculo") or "")
+                with av2:
+                    ea_placa = st.text_input("Placa", value=ag.get("placa") or "")
+
+                ad1, ad2 = st.columns(2)
+                with ad1:
+                    ea_data = st.date_input(
+                        "Data",
+                        value=parse_data(ag.get("data_agendamento")),
+                        format="DD/MM/YYYY",
+                    )
+                with ad2:
+                    ea_hora = st.time_input("Horário", value=parse_hora(ag.get("hora_agendamento")))
+
+                if st.form_submit_button("💾 Salvar Alterações", type="primary", use_container_width=True):
+                    supabase.table("agendamentos").update(
+                        {
+                            "empresa_nome": ea_emp.strip(),
+                            "cliente_nome": ea_cli.strip(),
+                            "cliente_whatsapp": ea_wa.strip(),
+                            "veiculo": ea_veic.strip(),
+                            "placa": ea_placa.strip().upper(),
+                            "data_agendamento": ea_data.isoformat(),
+                            "hora_agendamento": ea_hora.strftime("%H:%M"),
+                        }
+                    ).eq("id", ag["id"]).execute()
+                    st.session_state.form_ag_ver += 1
+                    st.session_state.aviso_sucesso = "Agendamento atualizado!"
+                    st.rerun()
+
+
 def render_editor_os(vistoria: dict, nomes_empresas: list, prefixo_key: str):
     ver_edit = st.session_state.fin_edit_ver
     emp_atual = vistoria.get("empresa_nome") or ""
@@ -704,7 +912,7 @@ def render_editor_os(vistoria: dict, nomes_empresas: list, prefixo_key: str):
                 format="DD/MM/YYYY",
             )
 
-        c5, c6, c7 = st.columns(3)
+        c5, c6, c7, c8 = st.columns(4)
         with c5:
             e_valor = st.number_input(
                 "Valor (R$)",
@@ -714,11 +922,14 @@ def render_editor_os(vistoria: dict, nomes_empresas: list, prefixo_key: str):
                 format="%.2f",
             )
         with c6:
-            tipos = ["Nova", "Renovação"]
-            t_atual = vistoria.get("tipo_vistoria") or "Nova"
-            idx_t = tipos.index(t_atual) if t_atual in tipos else 0
-            e_tipo = st.selectbox("Tipo", tipos, index=idx_t)
+            cat_atual = extrair_categoria_os(vistoria.get("tipo_vistoria"))
+            idx_cat = TIPOS_VISTORIA_OPCOES.index(cat_atual) if cat_atual in TIPOS_VISTORIA_OPCOES else 0
+            e_cat = st.selectbox("Tipo de Vistoria", TIPOS_VISTORIA_OPCOES, index=idx_cat)
         with c7:
+            mods = ["Nova", "Renovação"]
+            mod_atual = "Renovação" if "Renovação" in str(vistoria.get("tipo_vistoria") or "") else "Nova"
+            e_mod = st.selectbox("Modalidade", mods, index=mods.index(mod_atual))
+        with c8:
             statuses = ["Pendente", "Recebido"]
             s_atual = vistoria.get("status_pagamento") or "Pendente"
             idx_s = statuses.index(s_atual) if s_atual in statuses else 0
@@ -751,7 +962,7 @@ def render_editor_os(vistoria: dict, nomes_empresas: list, prefixo_key: str):
                             "placa": e_placa.strip().upper(),
                             "data_vistoria": e_data.isoformat(),
                             "valor": float(e_valor),
-                            "tipo_vistoria": e_tipo,
+                            "tipo_vistoria": f"{e_cat} ({e_mod})",
                             "status_pagamento": e_status,
                             "data_recebimento": nova_data_rec,
                         }
@@ -799,7 +1010,7 @@ def gerar_pdf_individual(vistoria: dict) -> bytes:
         ("Veículo", vistoria.get("veiculo", "-")),
         ("Placa", vistoria.get("placa", "-")),
         ("Data da Vistoria", fmt_data_br(vistoria.get("data_vistoria"))),
-        ("Tipo de Vistoria", vistoria.get("tipo_vistoria", "Nova")),
+        ("Tipo de Vistoria", vistoria.get("tipo_vistoria", "Cautelar")),
         ("Valor do Serviço", fmt_moeda(vistoria.get("valor", 0))),
         ("Status Financeiro", vistoria.get("status_pagamento", "Pendente")),
     ]
@@ -880,13 +1091,13 @@ def gerar_pdf_lote(vistorias: list, titulo_periodo: str, empresa_filtro: str = "
 
     pdf.set_fill_color(239, 230, 248)
     pdf.set_text_color(78, 26, 107)
-    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_font("Helvetica", "B", 8.5)
     colunas = [
-        ("Data", 22),
-        ("Empresa", 42),
-        ("Veículo", 44),
-        ("Placa", 22),
-        ("Tipo", 20),
+        ("Data", 20),
+        ("Empresa", 38),
+        ("Veículo", 39),
+        ("Placa", 21),
+        ("Tipo", 32),
         ("Status", 20),
         ("Valor", 20),
     ]
@@ -895,13 +1106,13 @@ def gerar_pdf_lote(vistorias: list, titulo_periodo: str, empresa_filtro: str = "
     pdf.ln()
 
     pdf.set_text_color(31, 41, 55)
-    pdf.set_font("Helvetica", "", 8.5)
+    pdf.set_font("Helvetica", "", 8)
     for v in vistorias:
-        pdf.cell(22, 7, limpar_latin1(fmt_data_br(v.get("data_vistoria"))), border=1, align="C")
-        pdf.cell(42, 7, limpar_latin1(str(v.get("empresa_nome", ""))[:22]), border=1)
-        pdf.cell(44, 7, limpar_latin1(str(v.get("veiculo", ""))[:24]), border=1)
-        pdf.cell(22, 7, limpar_latin1(str(v.get("placa", "")).upper()[:10]), border=1, align="C")
-        pdf.cell(20, 7, limpar_latin1(str(v.get("tipo_vistoria", "Nova"))[:10]), border=1, align="C")
+        pdf.cell(20, 7, limpar_latin1(fmt_data_br(v.get("data_vistoria"))), border=1, align="C")
+        pdf.cell(38, 7, limpar_latin1(str(v.get("empresa_nome", ""))[:20]), border=1)
+        pdf.cell(39, 7, limpar_latin1(str(v.get("veiculo", ""))[:21]), border=1)
+        pdf.cell(21, 7, limpar_latin1(str(v.get("placa", "")).upper()[:10]), border=1, align="C")
+        pdf.cell(32, 7, limpar_latin1(str(v.get("tipo_vistoria", "Cautelar"))[:18]), border=1, align="C")
         pdf.cell(20, 7, limpar_latin1(str(v.get("status_pagamento", "Pendente"))[:10]), border=1, align="C")
         pdf.cell(20, 7, limpar_latin1(fmt_moeda(v.get("valor", 0))), border=1, align="R")
         pdf.ln()
@@ -970,140 +1181,7 @@ def tela_login():
 
 
 # =========================================================
-# TELA 2: EMPRESAS PARCEIRAS
-# =========================================================
-def tela_empresas():
-    st.markdown("### 🤝 Empresas Parceiras")
-    mostrar_aviso_pendente()
-
-    ver = st.session_state.form_emp_ver
-    with st.expander("➕ Adicionar Nova Empresa", expanded=False):
-        with st.form(f"form_nova_empresa_{ver}", clear_on_submit=True):
-            nome = st.text_input("Nome da Empresa", key=f"emp_nome_{ver}")
-            responsavel = st.text_input("Nome do Responsável", key=f"emp_resp_{ver}")
-            whatsapp = st.text_input("Celular (WhatsApp)", key=f"emp_wa_{ver}")
-            c1, c2 = st.columns(2)
-            with c1:
-                dia_pagamento = st.number_input(
-                    "Dia do Pagamento",
-                    min_value=1,
-                    max_value=31,
-                    value=15,
-                    step=1,
-                    key=f"emp_dia_{ver}",
-                )
-            with c2:
-                valor_padrao = st.number_input(
-                    "Valor Padrão (R$)",
-                    min_value=0.0,
-                    value=0.0,
-                    step=1.0,
-                    format="%.2f",
-                    key=f"emp_val_{ver}",
-                )
-            salvar = st.form_submit_button("+ Salvar Empresa", type="primary", use_container_width=True)
-
-            if salvar:
-                if not nome.strip():
-                    st.warning("Informe o nome da empresa.")
-                else:
-                    try:
-                        supabase.table("vistorias_empresas").insert(
-                            {
-                                "nome": nome.strip(),
-                                "responsavel": responsavel.strip(),
-                                "whatsapp": whatsapp.strip(),
-                                "dia_pagamento": int(dia_pagamento),
-                                "valor_padrao": float(valor_padrao),
-                            }
-                        ).execute()
-                        st.session_state.form_emp_ver += 1
-                        st.session_state.aviso_sucesso = f"Empresa '{nome.strip()}' cadastrada com sucesso!"
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Erro ao salvar empresa: {e}")
-
-    empresas = carregar_empresas()
-    st.markdown(f"#### Empresas Cadastradas ({len(empresas)})")
-
-    if not empresas:
-        st.info("Nenhuma empresa cadastrada ainda. Clique em 'Adicionar Nova Empresa' acima.")
-        return
-
-    for emp in empresas:
-        wa_url = link_whatsapp(emp.get("whatsapp", ""))
-        wa_html = (
-            f'<a class="wa-btn" href="{wa_url}" target="_blank">💬 WhatsApp</a>'
-            if wa_url
-            else '<span style="color:var(--muted);font-size:0.8rem;">Sem WhatsApp</span>'
-        )
-        st.markdown(
-            f"""
-            <div class="cv-card">
-                <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
-                    <div>
-                        <div class="cv-card-title">🏢 {emp['nome']}</div>
-                        <div class="cv-card-sub">
-                            Resp.: {emp.get('responsavel') or '-'} • Paga dia {int(emp.get('dia_pagamento') or 15):02d} • Padrão: {fmt_moeda(emp.get('valor_padrao', 0))}
-                        </div>
-                    </div>
-                    <div>{wa_html}</div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        with st.expander(f"Detalhar / Editar / Excluir — {emp['nome']}"):
-            with st.form(f"edit_emp_{emp['id']}_{ver}"):
-                e_nome = st.text_input("Nome da Empresa", value=emp["nome"])
-                e_resp = st.text_input("Nome do Responsável", value=emp.get("responsavel") or "")
-                e_wa = st.text_input("Celular (WhatsApp)", value=emp.get("whatsapp") or "")
-                ec1, ec2 = st.columns(2)
-                with ec1:
-                    e_dia = st.number_input(
-                        "Dia do Pagamento", 1, 31, int(emp.get("dia_pagamento") or 15)
-                    )
-                with ec2:
-                    e_val = st.number_input(
-                        "Valor Padrão (R$)",
-                        min_value=0.0,
-                        value=float(emp.get("valor_padrao") or 0.0),
-                        step=1.0,
-                        format="%.2f",
-                    )
-                b1, b2 = st.columns(2)
-                with b1:
-                    atualizar = st.form_submit_button(
-                        "Salvar Alterações", type="primary", use_container_width=True
-                    )
-                with b2:
-                    excluir = st.form_submit_button("Excluir Empresa", use_container_width=True)
-
-                if atualizar:
-                    supabase.table("vistorias_empresas").update(
-                        {
-                            "nome": e_nome.strip(),
-                            "responsavel": e_resp.strip(),
-                            "whatsapp": e_wa.strip(),
-                            "dia_pagamento": int(e_dia),
-                            "valor_padrao": float(e_val),
-                        }
-                    ).eq("id", emp["id"]).execute()
-                    st.session_state.form_emp_ver += 1
-                    st.session_state.aviso_sucesso = f"Alterações de '{e_nome.strip()}' salvas!"
-                    st.rerun()
-                if excluir:
-                    supabase.table("vistorias_empresas").delete().eq("id", emp["id"]).execute()
-                    st.session_state.form_emp_ver += 1
-                    st.session_state.aviso_sucesso = (
-                        f"Empresa '{emp['nome']}' removida do cadastro. "
-                        "Se houver OS de teste dela no Financeiro, você pode excluí-la direto na aba Financeiro."
-                    )
-                    st.rerun()
-
-
-# =========================================================
-# TELA 3: AGENDA DE VISTORIAS
+# TELA 2: AGENDA DE VISTORIAS (COM MAPA DE HORÁRIOS DO DIA)
 # =========================================================
 def tela_agenda():
     st.markdown("### 📅 Agenda de Vistorias")
@@ -1116,69 +1194,69 @@ def tela_agenda():
     amanha = hoje + timedelta(days=1)
     ver = st.session_state.form_ag_ver
 
-    with st.form(f"form_novo_agendamento_{ver}", clear_on_submit=True):
-        st.markdown("**📅 Novo Agendamento**")
-        if nomes_empresas:
-            empresa_sel = st.selectbox("Empresa", nomes_empresas, key=f"ag_emp_{ver}")
-        else:
-            empresa_sel = st.text_input("Empresa", key=f"ag_emp_txt_{ver}")
-
-        c1, c2 = st.columns(2)
-        with c1:
-            cliente_nome = st.text_input("Cliente", key=f"ag_cli_{ver}")
-        with c2:
-            cliente_wa = st.text_input("WhatsApp do Cliente", key=f"ag_wa_{ver}")
-
-        v1, v2 = st.columns([2, 1])
-        with v1:
-            veiculo = st.text_input("Veículo", key=f"ag_veic_{ver}")
-        with v2:
-            placa = st.text_input("Placa", key=f"ag_placa_{ver}")
-
-        d1, d2 = st.columns(2)
-        with d1:
-            data_ag = st.date_input("Data", value=hoje, format="DD/MM/YYYY", key=f"ag_data_{ver}")
-        with d2:
-            hora_ag = st.time_input("Horário", value=time(9, 0), key=f"ag_hora_{ver}")
-
-        salvar_ag = st.form_submit_button("📅 Salvar na Agenda", type="primary", use_container_width=True)
-        if salvar_ag:
-            if not empresa_sel or not cliente_nome.strip() or not veiculo.strip() or not placa.strip():
-                st.warning("Preencha Empresa, Cliente, Veículo e Placa.")
+    # Formulário recolhido em quadrinho (igual Empresas)
+    with st.expander("➕ Novo Agendamento", expanded=False):
+        with st.form(f"form_novo_agendamento_{ver}", clear_on_submit=True):
+            if nomes_empresas:
+                empresa_sel = st.selectbox("Empresa", nomes_empresas, key=f"ag_emp_{ver}")
             else:
-                try:
-                    supabase.table("agendamentos").insert(
-                        {
-                            "empresa_id": None,
-                            "empresa_nome": empresa_sel.strip(),
-                            "cliente_nome": cliente_nome.strip(),
-                            "cliente_whatsapp": cliente_wa.strip(),
-                            "veiculo": veiculo.strip(),
-                            "placa": placa.strip().upper(),
-                            "data_agendamento": data_ag.isoformat(),
-                            "hora_agendamento": hora_ag.strftime("%H:%M"),
-                            "status": "Agendada",
-                        }
-                    ).execute()
-                    st.session_state.form_ag_ver += 1
-                    if data_ag == hoje:
-                        st.session_state.agenda_filtro = "Hoje"
-                        st.session_state.agenda_data_busca = None
-                    elif data_ag == amanha:
-                        st.session_state.agenda_filtro = "Amanhã"
-                        st.session_state.agenda_data_busca = None
-                    else:
-                        st.session_state.agenda_filtro = "Data"
-                        st.session_state.agenda_data_busca = data_ag
-                    st.session_state.aviso_sucesso = (
-                        f"Agendamento salvo para {data_ag.strftime('%d/%m/%Y')} às {hora_ag.strftime('%H:%M')}!"
-                    )
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Erro ao salvar agendamento: {e}")
+                empresa_sel = st.text_input("Empresa", key=f"ag_emp_txt_{ver}")
 
-    st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+            c1, c2 = st.columns(2)
+            with c1:
+                cliente_nome = st.text_input("Cliente", key=f"ag_cli_{ver}")
+            with c2:
+                cliente_wa = st.text_input("WhatsApp do Cliente", key=f"ag_wa_{ver}")
 
+            v1, v2 = st.columns([2, 1])
+            with v1:
+                veiculo = st.text_input("Veículo", key=f"ag_veic_{ver}")
+            with v2:
+                placa = st.text_input("Placa", key=f"ag_placa_{ver}")
+
+            d1, d2 = st.columns(2)
+            with d1:
+                data_ag = st.date_input("Data", value=hoje, format="DD/MM/YYYY", key=f"ag_data_{ver}")
+            with d2:
+                hora_ag = st.time_input("Horário", value=time(8, 0), key=f"ag_hora_{ver}")
+
+            salvar_ag = st.form_submit_button("📅 Salvar na Agenda", type="primary", use_container_width=True)
+            if salvar_ag:
+                if not empresa_sel or not cliente_nome.strip() or not veiculo.strip() or not placa.strip():
+                    st.warning("Preencha Empresa, Cliente, Veículo e Placa.")
+                else:
+                    try:
+                        supabase.table("agendamentos").insert(
+                            {
+                                "empresa_id": None,
+                                "empresa_nome": empresa_sel.strip(),
+                                "cliente_nome": cliente_nome.strip(),
+                                "cliente_whatsapp": cliente_wa.strip(),
+                                "veiculo": veiculo.strip(),
+                                "placa": placa.strip().upper(),
+                                "data_agendamento": data_ag.isoformat(),
+                                "hora_agendamento": hora_ag.strftime("%H:%M"),
+                                "status": "Agendada",
+                            }
+                        ).execute()
+                        st.session_state.form_ag_ver += 1
+                        if data_ag == hoje:
+                            st.session_state.agenda_filtro = "Hoje"
+                            st.session_state.agenda_data_busca = None
+                        elif data_ag == amanha:
+                            st.session_state.agenda_filtro = "Amanhã"
+                            st.session_state.agenda_data_busca = None
+                        else:
+                            st.session_state.agenda_filtro = "Data"
+                            st.session_state.agenda_data_busca = data_ag
+                        st.session_state.aviso_sucesso = (
+                            f"Agendamento salvo para {data_ag.strftime('%d/%m/%Y')} às {hora_ag.strftime('%H:%M')}!"
+                        )
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao salvar agendamento: {e}")
+
+    # Filtros: Hoje, Amanhã, Esta Semana
     inicio_semana = hoje - timedelta(days=hoje.weekday())
     fim_semana = inicio_semana + timedelta(days=6)
 
@@ -1196,6 +1274,7 @@ def tela_agenda():
                 st.session_state.agenda_data_busca = None
                 st.rerun()
 
+    # Pesquisa direta no calendário
     with st.container(border=True):
         pc1, pc2 = st.columns([2.4, 1.2])
         with pc1:
@@ -1213,146 +1292,107 @@ def tela_agenda():
                 st.session_state.agenda_data_busca = data_pesquisa
                 st.rerun()
 
-    agendamentos = carregar_agendamentos(apenas_agendadas=True)
+    # Carrega todos os agendamentos (pendentes e concluídos) para mostrar a ocupação real do dia
+    todos_agendamentos = carregar_agendamentos(apenas_agendadas=False)
 
-    filtrados = []
-    if st.session_state.agenda_filtro == "Hoje":
-        titulo_lista = f"Hoje ({hoje.strftime('%d/%m/%Y')})"
-        filtrados = [ag for ag in agendamentos if str(ag.get("data_agendamento", ""))[:10] == hoje.isoformat()]
-    elif st.session_state.agenda_filtro == "Amanhã":
-        titulo_lista = f"Amanhã ({amanha.strftime('%d/%m/%Y')})"
-        filtrados = [ag for ag in agendamentos if str(ag.get("data_agendamento", ""))[:10] == amanha.isoformat()]
-    elif st.session_state.agenda_filtro == "Esta Semana":
-        titulo_lista = f"Esta Semana ({inicio_semana.strftime('%d/%m')} a {fim_semana.strftime('%d/%m')})"
-        filtrados = [
+    # VISÃO SEMANAL
+    if st.session_state.agenda_filtro == "Esta Semana":
+        semana_ags = [
             ag
-            for ag in agendamentos
+            for ag in todos_agendamentos
             if inicio_semana.isoformat() <= str(ag.get("data_agendamento", ""))[:10] <= fim_semana.isoformat()
         ]
-    else:
-        dt_b = st.session_state.agenda_data_busca or hoje
-        titulo_lista = f"Data selecionada ({dt_b.strftime('%d/%m/%Y')})"
-        filtrados = [ag for ag in agendamentos if str(ag.get("data_agendamento", ""))[:10] == dt_b.isoformat()]
+        st.markdown(
+            f"#### 📆 Agenda de Esta Semana ({inicio_semana.strftime('%d/%m')} a {fim_semana.strftime('%d/%m')}) — {len(semana_ags)} registro(s)"
+        )
+        if not semana_ags:
+            st.info("Nenhum agendamento registrado para esta semana.")
+            return
 
-    st.markdown(f"#### Vistorias Agendadas — {titulo_lista} ({len(filtrados)})")
+        por_dia = {}
+        for ag in semana_ags:
+            por_dia.setdefault(str(ag.get("data_agendamento", ""))[:10], []).append(ag)
 
-    if not filtrados:
-        st.info("Nenhuma vistoria agendada para este período.")
+        for dt_iso in sorted(por_dia.keys()):
+            dt_obj = parse_data(dt_iso)
+            lista_dia = por_dia[dt_iso]
+            horarios_str = ", ".join(sorted(x.get("hora_agendamento", "") for x in lista_dia))
+            h1, h2 = st.columns([3, 1.3])
+            with h1:
+                st.markdown(
+                    f"**📅 {DIAS_SEMANA_COMPLETO[dt_obj.weekday()]}, {dt_obj.strftime('%d/%m/%Y')}** "
+                    f"({len(lista_dia)} horário(s): {horarios_str})"
+                )
+            with h2:
+                if st.button("Ver dia completo", key=f"ir_dia_{dt_iso}", use_container_width=True):
+                    st.session_state.agenda_filtro = "Data"
+                    st.session_state.agenda_data_busca = dt_obj
+                    st.rerun()
+
+            for ag in lista_dia:
+                render_card_agendamento(ag, mapa_empresas, nomes_empresas, prefixo=f"sem_{dt_iso}", mostrar_data=False)
         return
 
-    for ag in filtrados:
-        emp_nome = ag.get("empresa_nome", "")
-        badge_cls = "cv-badge-red" if "AD " in emp_nome.upper() else "cv-badge-purple"
-        msg_wa = (
-            f"Olá {ag.get('cliente_nome', '')}, tudo bem? "
-            f"Confirmando sua vistoria do veículo {ag.get('veiculo', '')} "
-            f"(Placa {ag.get('placa', '')}) em {fmt_data_br(ag.get('data_agendamento'))} às {ag.get('hora_agendamento', '')}."
-        )
-        wa_url = link_whatsapp(ag.get("cliente_whatsapp", ""), msg_wa)
-        wa_html = f'<a class="wa-btn" href="{wa_url}" target="_blank">💬 WhatsApp</a>' if wa_url else ""
+    # VISÃO DIÁRIA COMPLETA (Hoje, Amanhã ou Data escolhida no Calendário)
+    if st.session_state.agenda_filtro == "Hoje":
+        data_ref = hoje
+    elif st.session_state.agenda_filtro == "Amanhã":
+        data_ref = amanha
+    else:
+        data_ref = st.session_state.agenda_data_busca or hoje
 
-        st.markdown(
-            f"""
-            <div class="cv-card">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                    <span style="color:var(--muted);font-size:0.85rem;font-weight:600;">
-                        📅 {fmt_data_br(ag.get('data_agendamento'))} • ⏰ {ag.get('hora_agendamento', '')}
-                    </span>
-                    <span class="{badge_cls}">{emp_nome}</span>
-                </div>
-                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-                    <div>
-                        <div class="cv-card-title">
-                            {ag.get('veiculo', '')} • Placa: {ag.get('placa', '')}
-                        </div>
-                        <div class="cv-card-sub">
-                            👤 {ag.get('cliente_nome', '')} • 📞 {ag.get('cliente_whatsapp') or 'Não informado'}
-                        </div>
-                    </div>
-                    <div>{wa_html}</div>
-                </div>
+    ags_do_dia = [
+        ag for ag in todos_agendamentos if str(ag.get("data_agendamento", ""))[:10] == data_ref.isoformat()
+    ]
+
+    horarios_preenchidos = sorted(x.get("hora_agendamento", "") for x in ags_do_dia)
+    resumo_horarios = (
+        f"Horários preenchidos: <strong>{', '.join(horarios_preenchidos)}</strong>"
+        if horarios_preenchidos
+        else "Nenhum horário preenchido ainda — todos os horários estão livres."
+    )
+
+    st.markdown(
+        f"""
+        <div class="cv-day-summary">
+            <div style="font-size:1.05rem;font-weight:800;">
+                📅 {DIAS_SEMANA_COMPLETO[data_ref.weekday()]}, {data_ref.strftime('%d/%m/%Y')}
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
+            <div style="font-size:0.88rem;margin-top:4px;">
+                {len(ags_do_dia)} agendamento(s) no dia • {resumo_horarios}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-        bc1, bc2 = st.columns([4, 1])
-        with bc1:
-            if st.button(
-                "📋 Abrir Ordem de Serviço",
-                key=f"iniciar_{ag['id']}",
-                type="primary",
-                use_container_width=True,
-            ):
-                emp_info = mapa_empresas.get(emp_nome, {})
-                st.session_state.os_importada = {
-                    "agendamento_id": ag["id"],
-                    "empresa_nome": emp_nome,
-                    "cliente_nome": ag.get("cliente_nome", ""),
-                    "veiculo": ag.get("veiculo", ""),
-                    "placa": ag.get("placa", ""),
-                    "data_vistoria": ag.get("data_agendamento", hoje.isoformat()),
-                    "valor_padrao": float(emp_info.get("valor_padrao") or 0.0),
-                }
-                st.session_state.form_os_ver += 1
-                st.session_state.pagina = "Ordem de Serviço"
-                st.rerun()
-        with bc2:
-            if st.button("🗑️", key=f"del_ag_{ag['id']}", help="Remover agendamento", use_container_width=True):
-                supabase.table("agendamentos").delete().eq("id", ag["id"]).execute()
-                st.session_state.aviso_sucesso = "Agendamento removido."
-                st.rerun()
+    # Agrupa agendamentos por hora inteira para montar a grade completa do dia (07:00 às 19:00)
+    por_hora = {}
+    for ag in ags_do_dia:
+        h = extrair_hora_int(ag.get("hora_agendamento"))
+        por_hora.setdefault(h, []).append(ag)
 
-        with st.expander(f"✏️ Corrigir agendamento — {ag.get('veiculo', '')} ({ag.get('placa', '')})"):
-            opcoes_ag_emp = sorted({e for e in (nomes_empresas + [emp_nome]) if e})
-            with st.form(f"edit_ag_{ag['id']}_{ver}"):
-                if opcoes_ag_emp:
-                    idx_ae = opcoes_ag_emp.index(emp_nome) if emp_nome in opcoes_ag_emp else 0
-                    ea_emp = st.selectbox("Empresa", opcoes_ag_emp, index=idx_ae)
-                else:
-                    ea_emp = st.text_input("Empresa", value=emp_nome)
+    faixa_horas = sorted(set(range(7, 20)) | set(por_hora.keys()))
 
-                ac1, ac2 = st.columns(2)
-                with ac1:
-                    ea_cli = st.text_input("Cliente", value=ag.get("cliente_nome") or "")
-                with ac2:
-                    ea_wa = st.text_input("WhatsApp do Cliente", value=ag.get("cliente_whatsapp") or "")
-
-                av1, av2 = st.columns([2, 1])
-                with av1:
-                    ea_veic = st.text_input("Veículo", value=ag.get("veiculo") or "")
-                with av2:
-                    ea_placa = st.text_input("Placa", value=ag.get("placa") or "")
-
-                ad1, ad2 = st.columns(2)
-                with ad1:
-                    ea_data = st.date_input(
-                        "Data",
-                        value=parse_data(ag.get("data_agendamento")),
-                        format="DD/MM/YYYY",
-                    )
-                with ad2:
-                    ea_hora = st.time_input("Horário", value=parse_hora(ag.get("hora_agendamento")))
-
-                if st.form_submit_button("💾 Salvar Alterações", type="primary", use_container_width=True):
-                    supabase.table("agendamentos").update(
-                        {
-                            "empresa_nome": ea_emp.strip(),
-                            "cliente_nome": ea_cli.strip(),
-                            "cliente_whatsapp": ea_wa.strip(),
-                            "veiculo": ea_veic.strip(),
-                            "placa": ea_placa.strip().upper(),
-                            "data_agendamento": ea_data.isoformat(),
-                            "hora_agendamento": ea_hora.strftime("%H:%M"),
-                        }
-                    ).eq("id", ag["id"]).execute()
-                    st.session_state.form_ag_ver += 1
-                    st.session_state.aviso_sucesso = "Agendamento atualizado!"
-                    st.rerun()
+    for h in faixa_horas:
+        itens_hora = por_hora.get(h, [])
+        if itens_hora:
+            for ag in sorted(itens_hora, key=lambda x: x.get("hora_agendamento", "")):
+                render_card_agendamento(ag, mapa_empresas, nomes_empresas, prefixo=f"dia_{data_ref.isoformat()}", mostrar_data=False)
+        else:
+            st.markdown(
+                f"""
+                <div class="cv-slot-free">
+                    <span>🕒 {h:02d}:00</span>
+                    <span class="cv-slot-free-tag">Livre</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
 
 # =========================================================
-# TELA 4: ORDEM DE SERVIÇO
+# TELA 3: ORDEM DE SERVIÇO
 # =========================================================
 def tela_ordem_servico():
     st.markdown("### ✅ Ordem de Serviço")
@@ -1363,30 +1403,45 @@ def tela_ordem_servico():
     mapa_empresas = {e["nome"]: e for e in empresas}
     hoje = hoje_br()
     ver = st.session_state.form_os_ver
-
     imp = st.session_state.get("os_importada")
 
-    if imp:
-        st.markdown(
-            '<div class="cv-banner-import">📅 Dados carregados da Agenda</div>',
-            unsafe_allow_html=True,
-        )
-        if st.button("Limpar dados importados (nova OS avulsa)", use_container_width=True):
-            st.session_state.os_importada = None
-            st.session_state.form_os_ver += 1
-            st.rerun()
+    # Quadrinho recolhido (abre automaticamente quando vem da Agenda)
+    rotulo_exp = "📋 Concluir Ordem de Serviço (importada da Agenda)" if imp else "➕ Nova Ordem de Serviço"
+    with st.expander(rotulo_exp, expanded=bool(imp)):
+        if imp:
+            st.markdown(
+                '<div class="cv-banner-import">📅 Dados carregados da Agenda</div>',
+                unsafe_allow_html=True,
+            )
+            if st.button("Limpar dados importados (nova OS avulsa)", use_container_width=True):
+                st.session_state.os_importada = None
+                st.session_state.form_os_ver += 1
+                st.rerun()
 
-    with st.container(border=True):
         emp_padrao = imp["empresa_nome"] if imp else (nomes_empresas[0] if nomes_empresas else "")
         if nomes_empresas:
             idx_emp = nomes_empresas.index(emp_padrao) if emp_padrao in nomes_empresas else 0
             empresa_sel = st.selectbox("Empresa", nomes_empresas, index=idx_emp, key=f"os_emp_{ver}")
-            valor_sugerido = float(mapa_empresas[empresa_sel].get("valor_padrao") or 0.0)
-            if imp and empresa_sel == imp.get("empresa_nome") and imp.get("valor_padrao"):
-                valor_sugerido = float(imp["valor_padrao"])
+            emp_atual_obj = mapa_empresas[empresa_sel]
+            valor_sugerido = float(emp_atual_obj.get("valor_padrao") or 0.0)
+            tipo_sugerido = parse_tipos_empresa(emp_atual_obj.get("tipo_vistoria"))[0]
+            if imp and empresa_sel == imp.get("empresa_nome"):
+                if imp.get("valor_padrao"):
+                    valor_sugerido = float(imp["valor_padrao"])
+                if imp.get("tipo_padrao"):
+                    tipo_sugerido = imp["tipo_padrao"]
         else:
             empresa_sel = st.text_input("Empresa", value=emp_padrao, key=f"os_emp_txt_{ver}")
             valor_sugerido = float(imp["valor_padrao"]) if imp else 0.0
+            tipo_sugerido = imp.get("tipo_padrao", "Cautelar") if imp else "Cautelar"
+
+        idx_tipo = TIPOS_VISTORIA_OPCOES.index(tipo_sugerido) if tipo_sugerido in TIPOS_VISTORIA_OPCOES else 0
+        categoria_vistoria = st.selectbox(
+            "Tipo de Vistoria",
+            TIPOS_VISTORIA_OPCOES,
+            index=idx_tipo,
+            key=f"os_cat_{ver}_{empresa_sel}",
+        )
 
         cliente_val = st.text_input(
             "Cliente / Segurado (opcional)",
@@ -1419,25 +1474,25 @@ def tela_ordem_servico():
                 key=f"os_valor_{ver}_{empresa_sel}",
             )
 
-        st.markdown("**Tipo de Vistoria**")
+        st.markdown("**Modalidade**")
         tv1, tv2 = st.columns(2)
         with tv1:
             if st.button(
                 "Nova",
-                key=f"btn_tipo_nova_{ver}",
-                type="primary" if st.session_state.tipo_vistoria_os == "Nova" else "secondary",
+                key=f"btn_mod_nova_{ver}",
+                type="primary" if st.session_state.modalidade_os == "Nova" else "secondary",
                 use_container_width=True,
             ):
-                st.session_state.tipo_vistoria_os = "Nova"
+                st.session_state.modalidade_os = "Nova"
                 st.rerun()
         with tv2:
             if st.button(
                 "Renovação",
-                key=f"btn_tipo_renov_{ver}",
-                type="primary" if st.session_state.tipo_vistoria_os == "Renovação" else "secondary",
+                key=f"btn_mod_renov_{ver}",
+                type="primary" if st.session_state.modalidade_os == "Renovação" else "secondary",
                 use_container_width=True,
             ):
-                st.session_state.tipo_vistoria_os = "Renovação"
+                st.session_state.modalidade_os = "Renovação"
                 st.rerun()
 
         st.markdown("**Foto do Veículo**")
@@ -1469,48 +1524,290 @@ def tela_ordem_servico():
                     unsafe_allow_html=True,
                 )
 
-    st.markdown('<span class="marker-red"></span>', unsafe_allow_html=True)
-    concluir = st.button("✔ Concluir Ordem de Serviço", key=f"btn_concluir_os_{ver}", use_container_width=True)
+        st.markdown('<span class="marker-red"></span>', unsafe_allow_html=True)
+        concluir = st.button(
+            "✔ Concluir Ordem de Serviço",
+            key=f"btn_concluir_os_{ver}",
+            use_container_width=True,
+        )
 
-    if concluir:
-        if not empresa_sel.strip() or not veiculo_val.strip() or not placa_val.strip():
-            st.warning("Preencha Empresa, Veículo e Placa antes de concluir.")
-        else:
-            foto_b64 = None
-            if foto_arquivo is not None:
+        if concluir:
+            if not empresa_sel.strip() or not veiculo_val.strip() or not placa_val.strip():
+                st.warning("Preencha Empresa, Veículo e Placa antes de concluir.")
+            else:
+                foto_b64 = None
+                if foto_arquivo is not None:
+                    try:
+                        foto_b64 = comprimir_imagem_para_base64(foto_arquivo)
+                    except Exception as e:
+                        st.error(f"Erro ao processar foto: {e}")
+                        return
+
+                payload = {
+                    "agendamento_id": imp["agendamento_id"] if imp else None,
+                    "empresa_id": None,
+                    "empresa_nome": empresa_sel.strip(),
+                    "cliente_nome": cliente_val.strip(),
+                    "veiculo": veiculo_val.strip(),
+                    "placa": placa_val.strip().upper(),
+                    "data_vistoria": data_val.isoformat(),
+                    "valor": float(valor_val),
+                    "tipo_vistoria": f"{categoria_vistoria} ({st.session_state.modalidade_os})",
+                    "foto_base64": foto_b64,
+                    "status_pagamento": "Pendente",
+                    "data_recebimento": None,
+                }
                 try:
-                    foto_b64 = comprimir_imagem_para_base64(foto_arquivo)
+                    supabase.table("vistorias").insert(payload).execute()
+                    if imp and imp.get("agendamento_id"):
+                        supabase.table("agendamentos").update({"status": "Concluida"}).eq(
+                            "id", imp["agendamento_id"]
+                        ).execute()
+                    st.session_state.os_importada = None
+                    st.session_state.modalidade_os = "Nova"
+                    st.session_state.form_os_ver += 1
+                    st.session_state.aviso_sucesso = "Ordem de Serviço concluída e enviada para o Financeiro!"
+                    st.rerun()
                 except Exception as e:
-                    st.error(f"Erro ao processar foto: {e}")
-                    return
+                    st.error(f"Erro ao concluir Ordem de Serviço: {e}")
 
-            payload = {
-                "agendamento_id": imp["agendamento_id"] if imp else None,
-                "empresa_id": None,
-                "empresa_nome": empresa_sel.strip(),
-                "cliente_nome": cliente_val.strip(),
-                "veiculo": veiculo_val.strip(),
-                "placa": placa_val.strip().upper(),
-                "data_vistoria": data_val.isoformat(),
-                "valor": float(valor_val),
-                "tipo_vistoria": st.session_state.tipo_vistoria_os,
-                "foto_base64": foto_b64,
-                "status_pagamento": "Pendente",
-                "data_recebimento": None,
-            }
-            try:
-                supabase.table("vistorias").insert(payload).execute()
-                if imp and imp.get("agendamento_id"):
-                    supabase.table("agendamentos").update({"status": "Concluida"}).eq(
-                        "id", imp["agendamento_id"]
-                    ).execute()
-                st.session_state.os_importada = None
-                st.session_state.tipo_vistoria_os = "Nova"
-                st.session_state.form_os_ver += 1
-                st.session_state.aviso_sucesso = "Ordem de Serviço concluída e enviada para o Financeiro!"
+    # Sub-abas organizadas: OS do Dia / Próximas OS / Histórico de OS
+    st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+    s1, s2, s3 = st.columns(3)
+    for col, nome_sub in [
+        (s1, "OS do Dia"),
+        (s2, "Próximas OS"),
+        (s3, "Histórico de OS"),
+    ]:
+        with col:
+            if st.button(
+                nome_sub,
+                key=f"sub_os_{nome_sub}",
+                type="primary" if st.session_state.os_subaba == nome_sub else "secondary",
+                use_container_width=True,
+            ):
+                st.session_state.os_subaba = nome_sub
                 st.rerun()
-            except Exception as e:
-                st.error(f"Erro ao concluir Ordem de Serviço: {e}")
+
+    agendadas = carregar_agendamentos(apenas_agendadas=True)
+    vistorias = carregar_vistorias()
+
+    if st.session_state.os_subaba == "OS do Dia":
+        ags_hoje = [a for a in agendadas if str(a.get("data_agendamento", ""))[:10] == hoje.isoformat()]
+        concl_hoje = [v for v in vistorias if str(v.get("data_vistoria", ""))[:10] == hoje.isoformat()]
+
+        st.markdown(f"#### 📌 Pendentes de Hoje ({hoje.strftime('%d/%m/%Y')}) — {len(ags_hoje)}")
+        if not ags_hoje:
+            st.info("Nenhuma Ordem de Serviço pendente na agenda de hoje.")
+        else:
+            for ag in ags_hoje:
+                render_card_agendamento(ag, mapa_empresas, nomes_empresas, prefixo="os_hoje", mostrar_data=False)
+
+        st.markdown(f"#### ✅ Concluídas Hoje — {len(concl_hoje)}")
+        if not concl_hoje:
+            st.caption("Nenhuma Ordem de Serviço concluída hoje ainda.")
+        else:
+            for v in concl_hoje:
+                _render_card_os_concluida(v, nomes_empresas, prefixo="os_dia_conc")
+
+    elif st.session_state.os_subaba == "Próximas OS":
+        proximas = [a for a in agendadas if str(a.get("data_agendamento", ""))[:10] > hoje.isoformat()]
+        st.markdown(f"#### 📆 Próximas Ordens de Serviço ({len(proximas)})")
+        if not proximas:
+            st.info("Nenhuma Ordem de Serviço futura agendada.")
+        else:
+            for ag in proximas:
+                render_card_agendamento(ag, mapa_empresas, nomes_empresas, prefixo="os_prox", mostrar_data=True)
+
+    else:
+        st.markdown(f"#### 🗂️ Histórico de Ordens de Serviço ({len(vistorias)})")
+        if not vistorias:
+            st.info("Nenhuma Ordem de Serviço concluída ainda.")
+        else:
+            for v in vistorias:
+                _render_card_os_concluida(v, nomes_empresas, prefixo="os_hist")
+
+
+def _render_card_os_concluida(v: dict, nomes_empresas: list, prefixo: str):
+    st_pg = v.get("status_pagamento", "Pendente")
+    badge = "cv-badge-green" if st_pg == "Recebido" else "cv-badge-purple"
+    st.markdown(
+        f"""
+        <div class="cv-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span class="cv-card-title">
+                    OS #{v['id']} • {v['veiculo']} ({v['placa']})
+                </span>
+                <span class="{badge}">{st_pg}</span>
+            </div>
+            <div class="cv-card-sub">
+                🏢 {v['empresa_nome']} • 📅 {fmt_data_br(v['data_vistoria'])} • 🔍 {v.get('tipo_vistoria', 'Cautelar')} •
+                <strong style="color:var(--text);">{fmt_moeda(v['valor'])}</strong>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.expander(f"Ver foto / Corrigir / Excluir — OS #{v['id']}"):
+        if v.get("cliente_nome"):
+            st.write(f"**Cliente:** {v['cliente_nome']}")
+        if v.get("foto_base64"):
+            st.image(base64_para_bytes(v["foto_base64"]), width=260)
+        render_editor_os(v, nomes_empresas, prefixo_key=prefixo)
+
+
+# =========================================================
+# TELA 4: EMPRESAS PARCEIRAS
+# =========================================================
+def tela_empresas():
+    st.markdown("### 🤝 Empresas Parceiras")
+    mostrar_aviso_pendente()
+
+    ver = st.session_state.form_emp_ver
+    with st.expander("➕ Adicionar Nova Empresa", expanded=False):
+        with st.form(f"form_nova_empresa_{ver}", clear_on_submit=True):
+            nome = st.text_input("Nome da Empresa", key=f"emp_nome_{ver}")
+            tipos_sel = st.multiselect(
+                "Tipo de Vistoria",
+                TIPOS_VISTORIA_OPCOES,
+                default=["Cautelar"],
+                key=f"emp_tipos_{ver}",
+            )
+            responsavel = st.text_input("Nome do Responsável", key=f"emp_resp_{ver}")
+            whatsapp = st.text_input("Celular (WhatsApp)", key=f"emp_wa_{ver}")
+            c1, c2 = st.columns(2)
+            with c1:
+                dia_pagamento = st.number_input(
+                    "Dia do Pagamento",
+                    min_value=1,
+                    max_value=31,
+                    value=15,
+                    step=1,
+                    key=f"emp_dia_{ver}",
+                )
+            with c2:
+                valor_padrao = st.number_input(
+                    "Valor Padrão (R$)",
+                    min_value=0.0,
+                    value=0.0,
+                    step=1.0,
+                    format="%.2f",
+                    key=f"emp_val_{ver}",
+                )
+            salvar = st.form_submit_button("+ Salvar Empresa", type="primary", use_container_width=True)
+
+            if salvar:
+                if not nome.strip():
+                    st.warning("Informe o nome da empresa.")
+                else:
+                    tipo_str = ", ".join(tipos_sel) if tipos_sel else "Cautelar"
+                    try:
+                        supabase.table("vistorias_empresas").insert(
+                            {
+                                "nome": nome.strip(),
+                                "tipo_vistoria": tipo_str,
+                                "responsavel": responsavel.strip(),
+                                "whatsapp": whatsapp.strip(),
+                                "dia_pagamento": int(dia_pagamento),
+                                "valor_padrao": float(valor_padrao),
+                            }
+                        ).execute()
+                        st.session_state.form_emp_ver += 1
+                        st.session_state.aviso_sucesso = f"Empresa '{nome.strip()}' cadastrada com sucesso!"
+                        st.rerun()
+                    except Exception as e:
+                        st.error(
+                            f"Erro ao salvar empresa (confirme se rodou o SQL da coluna tipo_vistoria): {e}"
+                        )
+
+    empresas = carregar_empresas()
+    st.markdown(f"#### Empresas Cadastradas ({len(empresas)})")
+
+    if not empresas:
+        st.info("Nenhuma empresa cadastrada ainda. Clique em 'Adicionar Nova Empresa' acima.")
+        return
+
+    for emp in empresas:
+        wa_url = link_whatsapp(emp.get("whatsapp", ""))
+        wa_html = (
+            f'<a class="wa-btn" href="{wa_url}" target="_blank">💬 WhatsApp</a>'
+            if wa_url
+            else '<span style="color:var(--muted);font-size:0.8rem;">Sem WhatsApp</span>'
+        )
+        tipos_label = emp.get("tipo_vistoria") or "Cautelar"
+        st.markdown(
+            f"""
+            <div class="cv-card">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+                    <div>
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                            <span class="cv-card-title">🏢 {emp['nome']}</span>
+                            <span class="cv-badge-purple">🔍 {tipos_label}</span>
+                        </div>
+                        <div class="cv-card-sub">
+                            Resp.: {emp.get('responsavel') or '-'} • Paga dia {int(emp.get('dia_pagamento') or 15):02d} • Padrão: {fmt_moeda(emp.get('valor_padrao', 0))}
+                        </div>
+                    </div>
+                    <div>{wa_html}</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        with st.expander(f"Detalhar / Editar / Excluir — {emp['nome']}"):
+            with st.form(f"edit_emp_{emp['id']}_{ver}"):
+                e_nome = st.text_input("Nome da Empresa", value=emp["nome"])
+                e_tipos = st.multiselect(
+                    "Tipo de Vistoria",
+                    TIPOS_VISTORIA_OPCOES,
+                    default=parse_tipos_empresa(emp.get("tipo_vistoria")),
+                )
+                e_resp = st.text_input("Nome do Responsável", value=emp.get("responsavel") or "")
+                e_wa = st.text_input("Celular (WhatsApp)", value=emp.get("whatsapp") or "")
+                ec1, ec2 = st.columns(2)
+                with ec1:
+                    e_dia = st.number_input(
+                        "Dia do Pagamento", 1, 31, int(emp.get("dia_pagamento") or 15)
+                    )
+                with ec2:
+                    e_val = st.number_input(
+                        "Valor Padrão (R$)",
+                        min_value=0.0,
+                        value=float(emp.get("valor_padrao") or 0.0),
+                        step=1.0,
+                        format="%.2f",
+                    )
+                b1, b2 = st.columns(2)
+                with b1:
+                    atualizar = st.form_submit_button(
+                        "Salvar Alterações", type="primary", use_container_width=True
+                    )
+                with b2:
+                    excluir = st.form_submit_button("Excluir Empresa", use_container_width=True)
+
+                if atualizar:
+                    tipo_str = ", ".join(e_tipos) if e_tipos else "Cautelar"
+                    supabase.table("vistorias_empresas").update(
+                        {
+                            "nome": e_nome.strip(),
+                            "tipo_vistoria": tipo_str,
+                            "responsavel": e_resp.strip(),
+                            "whatsapp": e_wa.strip(),
+                            "dia_pagamento": int(e_dia),
+                            "valor_padrao": float(e_val),
+                        }
+                    ).eq("id", emp["id"]).execute()
+                    st.session_state.form_emp_ver += 1
+                    st.session_state.aviso_sucesso = f"Alterações de '{e_nome.strip()}' salvas!"
+                    st.rerun()
+                if excluir:
+                    supabase.table("vistorias_empresas").delete().eq("id", emp["id"]).execute()
+                    st.session_state.form_emp_ver += 1
+                    st.session_state.aviso_sucesso = (
+                        f"Empresa '{emp['nome']}' removida do cadastro. "
+                        "Caso exista alguma OS dela no Financeiro, você pode excluir na aba Financeiro."
+                    )
+                    st.rerun()
 
 
 # =========================================================
@@ -1755,7 +2052,7 @@ def tela_pdf():
                     <span class="{badge}">{st_pg}</span>
                 </div>
                 <div class="cv-card-sub">
-                    🏢 {v['empresa_nome']} • 📅 {fmt_data_br(v['data_vistoria'])} • {v.get('tipo_vistoria', 'Nova')} •
+                    🏢 {v['empresa_nome']} • 📅 {fmt_data_br(v['data_vistoria'])} • 🔍 {v.get('tipo_vistoria', 'Cautelar')} •
                     <strong style="color:var(--text);">{fmt_moeda(v['valor'])}</strong>
                 </div>
             </div>
@@ -1807,14 +2104,15 @@ def main():
             st.session_state.os_importada = None
             st.rerun()
 
+    # Ordem: 1. Agenda | 2. Ordem de Serviço | 3. Empresas | 4. Financeiro | 5. PDF
     abas = [
         ("Agenda", "📅 Agenda"),
         ("Ordem de Serviço", "✅ Ordem de Serviço"),
-        ("Financeiro", "💰 Financeiro"),
         ("Empresas", "🤝 Empresas"),
+        ("Financeiro", "💰 Financeiro"),
         ("PDF", "📄 PDF"),
     ]
-    cols_nav = st.columns([1.0, 1.85, 1.25, 1.15, 0.85])
+    cols_nav = st.columns([1.0, 1.85, 1.15, 1.25, 0.85])
     for col, (chave, rotulo) in zip(cols_nav, abas):
         with col:
             tipo = "primary" if st.session_state.pagina == chave else "secondary"
@@ -1824,12 +2122,12 @@ def main():
 
     st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
 
-    if st.session_state.pagina == "Empresas":
-        tela_empresas()
-    elif st.session_state.pagina == "Agenda":
+    if st.session_state.pagina == "Agenda":
         tela_agenda()
     elif st.session_state.pagina == "Ordem de Serviço":
         tela_ordem_servico()
+    elif st.session_state.pagina == "Empresas":
+        tela_empresas()
     elif st.session_state.pagina == "Financeiro":
         tela_financeiro()
     elif st.session_state.pagina == "PDF":
