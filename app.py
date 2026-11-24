@@ -3,7 +3,7 @@ import io
 import os
 import re
 import tempfile
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from urllib.parse import quote
 
 import streamlit as st
@@ -18,7 +18,7 @@ except ImportError:
 
 
 # =========================================================
-# CONFIGURAÇÃO DA PÁGINA E CREDENCIAIS
+# CONFIGURAÇÃO DA PÁGINA, FUSO HORÁRIO (BRASIL) E LOGIN
 # =========================================================
 st.set_page_config(
     page_title="Controle de Vistorias",
@@ -26,6 +26,17 @@ st.set_page_config(
     layout="centered",
     initial_sidebar_state="collapsed",
 )
+
+FUSO_BR = timezone(timedelta(hours=-3))
+
+
+def agora_br() -> datetime:
+    return datetime.now(FUSO_BR)
+
+
+def hoje_br() -> date:
+    return agora_br().date()
+
 
 LOGIN_USUARIO = "AD Vistoria"
 LOGIN_SENHA = "55496449100084"
@@ -45,8 +56,6 @@ MESES_PT = {
     12: "Dezembro",
 }
 
-DIAS_SEMANA_PT = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
-
 
 # =========================================================
 # ESTADO INICIAL DA SESSÃO
@@ -62,13 +71,21 @@ if "os_importada" not in st.session_state:
 if "tipo_vistoria_os" not in st.session_state:
     st.session_state.tipo_vistoria_os = "Nova"
 if "fin_mes" not in st.session_state:
-    st.session_state.fin_mes = date.today().month
+    st.session_state.fin_mes = hoje_br().month
 if "fin_ano" not in st.session_state:
-    st.session_state.fin_ano = date.today().year
+    st.session_state.fin_ano = hoje_br().year
 if "agenda_filtro" not in st.session_state:
     st.session_state.agenda_filtro = "Hoje"
-if "agenda_dia_selecionado" not in st.session_state:
-    st.session_state.agenda_dia_selecionado = None
+if "agenda_data_busca" not in st.session_state:
+    st.session_state.agenda_data_busca = None
+if "form_emp_ver" not in st.session_state:
+    st.session_state.form_emp_ver = 0
+if "form_ag_ver" not in st.session_state:
+    st.session_state.form_ag_ver = 0
+if "form_os_ver" not in st.session_state:
+    st.session_state.form_os_ver = 0
+if "aviso_sucesso" not in st.session_state:
+    st.session_state.aviso_sucesso = None
 
 
 # =========================================================
@@ -79,7 +96,6 @@ def aplicar_tema(modo: str):
         cores = {
             "bg": "#0F1117",
             "surface": "#191C26",
-            "surface_alt": "#222634",
             "border": "#2E3345",
             "text": "#F3F4F6",
             "muted": "#9CA3AF",
@@ -109,7 +125,6 @@ def aplicar_tema(modo: str):
         cores = {
             "bg": "#F4F5F7",
             "surface": "#FFFFFF",
-            "surface_alt": "#F9FAFB",
             "border": "#E5E7EB",
             "text": "#1F2937",
             "muted": "#6B7280",
@@ -142,7 +157,6 @@ def aplicar_tema(modo: str):
         :root {{
             --bg: {cores['bg']};
             --surface: {cores['surface']};
-            --surface-alt: {cores['surface_alt']};
             --border: {cores['border']};
             --text: {cores['text']};
             --muted: {cores['muted']};
@@ -169,21 +183,20 @@ def aplicar_tema(modo: str):
             --shadow: {cores['shadow']};
         }}
 
-        /* Fundo geral e cabeçalho Streamlit */
         .stApp, [data-testid="stAppViewContainer"] {{
             background-color: var(--bg) !important;
             color: var(--text) !important;
         }}
         [data-testid="stHeader"] {{
-            background-color: var(--bg) !important;
+            background-color: transparent !important;
+            height: 2.8rem !important;
         }}
         .block-container {{
-            max-width: 740px;
-            padding-top: 1.1rem;
-            padding-bottom: 3rem;
+            max-width: 900px !important;
+            padding-top: 4.2rem !important;
+            padding-bottom: 3rem !important;
         }}
 
-        /* Textos e títulos globais */
         h1, h2, h3, h4, h5, h6,
         .stMarkdown p, .stMarkdown li,
         label, [data-testid="stWidgetLabel"] p,
@@ -195,7 +208,6 @@ def aplicar_tema(modo: str):
             color: var(--muted) !important;
         }}
 
-        /* Formulários como cartões das fotos */
         [data-testid="stForm"] {{
             background-color: var(--surface) !important;
             border: 1px solid var(--border) !important;
@@ -204,7 +216,6 @@ def aplicar_tema(modo: str):
             box-shadow: var(--shadow) !important;
         }}
 
-        /* Containers com borda */
         [data-testid="stVerticalBlockBorderWrapper"] {{
             background-color: var(--surface) !important;
             border-color: var(--border) !important;
@@ -212,7 +223,6 @@ def aplicar_tema(modo: str):
             box-shadow: var(--shadow) !important;
         }}
 
-        /* Inputs, Selectbox, Date e Number */
         [data-baseweb="input"],
         [data-baseweb="base-input"],
         [data-baseweb="select"] > div,
@@ -226,24 +236,19 @@ def aplicar_tema(modo: str):
             color: var(--text) !important;
             -webkit-text-fill-color: var(--text) !important;
         }}
-        input::placeholder, textarea::placeholder {{
-            color: var(--muted) !important;
-            -webkit-text-fill-color: var(--muted) !important;
-        }}
 
-        /* Expanders */
         [data-testid="stExpander"] {{
             background-color: var(--surface) !important;
             border: 1px solid var(--border) !important;
             border-radius: 14px !important;
             margin-bottom: 10px;
+            box-shadow: var(--shadow);
         }}
         [data-testid="stExpander"] summary p {{
             color: var(--text) !important;
-            font-weight: 600;
+            font-weight: 700;
         }}
 
-        /* Cards customizados */
         .cv-card {{
             background: var(--surface);
             border: 1px solid var(--border);
@@ -281,7 +286,6 @@ def aplicar_tema(modo: str):
             margin-top: 4px;
         }}
 
-        /* Cartão Hero Financeiro (Roxo Fechado em degradê geométrico) */
         .cv-hero-purple {{
             background: linear-gradient(135deg, #3D1259 0%, #561D7A 55%, #6E2899 100%);
             color: #FFFFFF;
@@ -331,7 +335,6 @@ def aplicar_tema(modo: str):
             display: inline-block;
         }}
 
-        /* Etiquetas (Badges) */
         .cv-badge-purple {{
             background: var(--purple-soft-bg);
             color: var(--purple-soft-text);
@@ -360,7 +363,6 @@ def aplicar_tema(modo: str):
             display: inline-block;
         }}
 
-        /* Banner Dados Importados da Agenda */
         .cv-banner-import {{
             background: var(--purple-soft-bg);
             color: var(--purple-soft-text);
@@ -371,7 +373,6 @@ def aplicar_tema(modo: str):
             margin-bottom: 12px;
         }}
 
-        /* Barra de Mês no Financeiro */
         .cv-month-bar {{
             text-align: center;
             font-weight: 700;
@@ -384,7 +385,6 @@ def aplicar_tema(modo: str):
             box-shadow: var(--shadow);
         }}
 
-        /* Cabeçalho da Tela de Login */
         .login-box {{
             text-align: center;
             padding: 8px 0 12px 0;
@@ -428,11 +428,14 @@ def aplicar_tema(modo: str):
             color: #FFFFFF !important;
             border-radius: 11px !important;
             font-weight: 700 !important;
+            padding-left: 0.5rem !important;
+            padding-right: 0.5rem !important;
         }}
         div.stButton > button[kind="primary"] p,
         div.stFormSubmitButton > button[kind="primary"] p,
         div.stDownloadButton > button[kind="primary"] p {{
             color: #FFFFFF !important;
+            white-space: nowrap !important;
         }}
         div.stButton > button[kind="primary"]:hover,
         div.stFormSubmitButton > button[kind="primary"]:hover {{
@@ -449,14 +452,17 @@ def aplicar_tema(modo: str):
             color: var(--sec-btn-text) !important;
             border-radius: 11px !important;
             font-weight: 600 !important;
+            padding-left: 0.5rem !important;
+            padding-right: 0.5rem !important;
         }}
         div.stButton > button[kind="secondary"] p,
         div.stFormSubmitButton > button[kind="secondary"] p,
         div.stDownloadButton > button[kind="secondary"] p {{
             color: var(--sec-btn-text) !important;
+            white-space: nowrap !important;
         }}
 
-        /* Botão VERMELHO específico (Concluir OS) via marcador irmão */
+        /* Botão VERMELHO específico (Concluir Ordem de Serviço) */
         div[data-testid="stElementContainer"]:has(.marker-red) + div[data-testid="stElementContainer"] button,
         div.element-container:has(.marker-red) + div.element-container button {{
             background-color: var(--red) !important;
@@ -477,7 +483,7 @@ def aplicar_tema(modo: str):
             border-color: var(--red-hover) !important;
         }}
 
-        /* Botão VERDE específico (Marcar como Recebido) via marcador irmão */
+        /* Botão VERDE específico (Marcar como Recebido) */
         div[data-testid="stElementContainer"]:has(.marker-green) + div[data-testid="stElementContainer"] button,
         div.element-container:has(.marker-green) + div.element-container button {{
             background-color: var(--green) !important;
@@ -496,7 +502,6 @@ def aplicar_tema(modo: str):
             border-color: var(--green-hover) !important;
         }}
 
-        /* Botão circular/pílula verde do WhatsApp */
         .wa-btn {{
             display: inline-flex;
             align-items: center;
@@ -516,10 +521,9 @@ def aplicar_tema(modo: str):
             color: #FFFFFF !important;
         }}
 
-        /* Barra superior da marca */
         .brand-bar {{
             font-weight: 800;
-            font-size: 1.2rem;
+            font-size: 1.25rem;
             color: var(--purple-soft-text);
             padding-top: 6px;
         }}
@@ -602,6 +606,12 @@ def base64_para_bytes(b64_str: str) -> bytes:
 
 def limpar_latin1(texto: str) -> str:
     return str(texto or "").encode("latin-1", "replace").decode("latin-1")
+
+
+def mostrar_aviso_pendente():
+    if st.session_state.aviso_sucesso:
+        st.success(st.session_state.aviso_sucesso)
+        st.session_state.aviso_sucesso = None
 
 
 # =========================================================
@@ -706,7 +716,7 @@ def gerar_pdf_individual(vistoria: dict) -> bytes:
     pdf.cell(
         0,
         8,
-        limpar_latin1(f"Emitido em {datetime.now().strftime('%d/%m/%Y %H:%M')} - Controle de Vistorias"),
+        limpar_latin1(f"Emitido em {agora_br().strftime('%d/%m/%Y %H:%M')} - Controle de Vistorias"),
         align="C",
     )
     return bytes(pdf.output())
@@ -784,7 +794,7 @@ def gerar_pdf_lote(vistorias: list, titulo_periodo: str, empresa_filtro: str = "
 
 
 # =========================================================
-# COMPONENTE BOTÃO CLARO / ESCURO
+# BOTÃO CLARO / ESCURO
 # =========================================================
 def botao_alternar_tema(key_suffix: str = "topo"):
     label_tema = "🌙 Escuro" if st.session_state.tema == "claro" else "☀️ Claro"
@@ -813,11 +823,11 @@ def tela_login():
         unsafe_allow_html=True,
     )
 
-    col_esq, col_centro, col_dir = st.columns([0.08, 0.84, 0.08])
+    col_esq, col_centro, col_dir = st.columns([0.1, 0.8, 0.1])
     with col_centro:
         with st.form("form_login"):
-            usuario = st.text_input("Usuário ou E-mail", placeholder="AD Vistoria")
-            senha = st.text_input("Senha", type="password", placeholder="Digite sua senha")
+            usuario = st.text_input("Usuário")
+            senha = st.text_input("Senha", type="password")
             st.checkbox("Lembrar de mim", value=True)
             entrar = st.form_submit_button("Entrar →", type="primary", use_container_width=True)
 
@@ -834,7 +844,7 @@ def tela_login():
 
         st.markdown(
             "<p style='text-align:center;color:var(--muted);font-size:0.8rem;margin-top:16px;'>"
-            "Vistorias Pro • v1.2.0</p>",
+            "Vistorias Pro • AD Vistoria</p>",
             unsafe_allow_html=True,
         )
 
@@ -844,47 +854,60 @@ def tela_login():
 # =========================================================
 def tela_empresas():
     st.markdown("### 🤝 Empresas Parceiras")
+    mostrar_aviso_pendente()
 
-    with st.form("form_nova_empresa", clear_on_submit=True):
-        st.markdown("**🤝 Nova Empresa Parceira**")
-        nome = st.text_input("Nome da Empresa", placeholder="Ex: ABG Vistoria")
-        responsavel = st.text_input("Nome do Responsável", placeholder="Ex: Carlos Henrique")
-        whatsapp = st.text_input("Celular (WhatsApp)", placeholder="(84) 99999-0000")
-        c1, c2 = st.columns(2)
-        with c1:
-            dia_pagamento = st.number_input(
-                "Dia do Pagamento", min_value=1, max_value=31, value=15, step=1
-            )
-        with c2:
-            valor_padrao = st.number_input(
-                "Valor Padrão (R$)", min_value=0.0, value=0.0, step=1.0, format="%.2f"
-            )
-        salvar = st.form_submit_button("+ Salvar Empresa", type="primary", use_container_width=True)
+    ver = st.session_state.form_emp_ver
+    with st.expander("➕ Adicionar Nova Empresa", expanded=False):
+        with st.form(f"form_nova_empresa_{ver}", clear_on_submit=True):
+            nome = st.text_input("Nome da Empresa", key=f"emp_nome_{ver}")
+            responsavel = st.text_input("Nome do Responsável", key=f"emp_resp_{ver}")
+            whatsapp = st.text_input("Celular (WhatsApp)", key=f"emp_wa_{ver}")
+            c1, c2 = st.columns(2)
+            with c1:
+                dia_pagamento = st.number_input(
+                    "Dia do Pagamento",
+                    min_value=1,
+                    max_value=31,
+                    value=15,
+                    step=1,
+                    key=f"emp_dia_{ver}",
+                )
+            with c2:
+                valor_padrao = st.number_input(
+                    "Valor Padrão (R$)",
+                    min_value=0.0,
+                    value=0.0,
+                    step=1.0,
+                    format="%.2f",
+                    key=f"emp_val_{ver}",
+                )
+            salvar = st.form_submit_button("+ Salvar Empresa", type="primary", use_container_width=True)
 
-        if salvar:
-            if not nome.strip():
-                st.warning("Informe o nome da empresa.")
-            else:
-                try:
-                    supabase.table("vistorias_empresas").insert(
-                        {
-                            "nome": nome.strip(),
-                            "responsavel": responsavel.strip(),
-                            "whatsapp": whatsapp.strip(),
-                            "dia_pagamento": int(dia_pagamento),
-                            "valor_padrao": float(valor_padrao),
-                        }
-                    ).execute()
-                    st.success(f"Empresa '{nome.strip()}' cadastrada com sucesso!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Erro ao salvar empresa: {e}")
+            if salvar:
+                if not nome.strip():
+                    st.warning("Informe o nome da empresa.")
+                else:
+                    try:
+                        supabase.table("vistorias_empresas").insert(
+                            {
+                                "nome": nome.strip(),
+                                "responsavel": responsavel.strip(),
+                                "whatsapp": whatsapp.strip(),
+                                "dia_pagamento": int(dia_pagamento),
+                                "valor_padrao": float(valor_padrao),
+                            }
+                        ).execute()
+                        st.session_state.form_emp_ver += 1
+                        st.session_state.aviso_sucesso = f"Empresa '{nome.strip()}' cadastrada com sucesso!"
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao salvar empresa: {e}")
 
     empresas = carregar_empresas()
     st.markdown(f"#### Empresas Cadastradas ({len(empresas)})")
 
     if not empresas:
-        st.info("Nenhuma empresa cadastrada ainda. Cadastre sua primeira empresa parceira acima.")
+        st.info("Nenhuma empresa cadastrada ainda. Clique em 'Adicionar Nova Empresa' acima.")
         return
 
     for emp in empresas:
@@ -910,11 +933,11 @@ def tela_empresas():
             """,
             unsafe_allow_html=True,
         )
-        with st.expander(f"Editar ou excluir: {emp['nome']}"):
-            with st.form(f"edit_emp_{emp['id']}"):
-                e_nome = st.text_input("Nome", value=emp["nome"])
-                e_resp = st.text_input("Responsável", value=emp.get("responsavel") or "")
-                e_wa = st.text_input("WhatsApp", value=emp.get("whatsapp") or "")
+        with st.expander(f"Detalhar / Editar / Excluir — {emp['nome']}"):
+            with st.form(f"edit_emp_{emp['id']}_{ver}"):
+                e_nome = st.text_input("Nome da Empresa", value=emp["nome"])
+                e_resp = st.text_input("Nome do Responsável", value=emp.get("responsavel") or "")
+                e_wa = st.text_input("Celular (WhatsApp)", value=emp.get("whatsapp") or "")
                 ec1, ec2 = st.columns(2)
                 with ec1:
                     e_dia = st.number_input(
@@ -930,7 +953,9 @@ def tela_empresas():
                     )
                 b1, b2 = st.columns(2)
                 with b1:
-                    atualizar = st.form_submit_button("Salvar Alterações", type="primary", use_container_width=True)
+                    atualizar = st.form_submit_button(
+                        "Salvar Alterações", type="primary", use_container_width=True
+                    )
                 with b2:
                     excluir = st.form_submit_button("Excluir Empresa", use_container_width=True)
 
@@ -944,11 +969,13 @@ def tela_empresas():
                             "valor_padrao": float(e_val),
                         }
                     ).eq("id", emp["id"]).execute()
-                    st.success("Empresa atualizada!")
+                    st.session_state.form_emp_ver += 1
+                    st.session_state.aviso_sucesso = f"Alterações de '{e_nome.strip()}' salvas!"
                     st.rerun()
                 if excluir:
                     supabase.table("vistorias_empresas").delete().eq("id", emp["id"]).execute()
-                    st.warning("Empresa removida.")
+                    st.session_state.form_emp_ver += 1
+                    st.session_state.aviso_sucesso = f"Empresa '{emp['nome']}' removida."
                     st.rerun()
 
 
@@ -957,34 +984,39 @@ def tela_empresas():
 # =========================================================
 def tela_agenda():
     st.markdown("### 📅 Agenda de Vistorias")
+    mostrar_aviso_pendente()
+
     empresas = carregar_empresas()
     nomes_empresas = [e["nome"] for e in empresas]
     mapa_empresas = {e["nome"]: e for e in empresas}
+    hoje = hoje_br()
+    amanha = hoje + timedelta(days=1)
+    ver = st.session_state.form_ag_ver
 
-    with st.form("form_novo_agendamento", clear_on_submit=True):
+    with st.form(f"form_novo_agendamento_{ver}", clear_on_submit=True):
         st.markdown("**📅 Novo Agendamento**")
         if nomes_empresas:
-            empresa_sel = st.selectbox("Empresa", nomes_empresas)
+            empresa_sel = st.selectbox("Empresa", nomes_empresas, key=f"ag_emp_{ver}")
         else:
-            empresa_sel = st.text_input("Empresa", placeholder="Ex: ABG Vistoria (cadastre na aba Empresas)")
+            empresa_sel = st.text_input("Empresa", key=f"ag_emp_txt_{ver}")
 
         c1, c2 = st.columns(2)
         with c1:
-            cliente_nome = st.text_input("Cliente", placeholder="Nome do cliente")
+            cliente_nome = st.text_input("Cliente", key=f"ag_cli_{ver}")
         with c2:
-            cliente_wa = st.text_input("WhatsApp do Cliente", placeholder="(84) 99999-0000")
+            cliente_wa = st.text_input("WhatsApp do Cliente", key=f"ag_wa_{ver}")
 
         v1, v2 = st.columns([2, 1])
         with v1:
-            veiculo = st.text_input("Veículo", placeholder="Ex: Fiat Argo Branco")
+            veiculo = st.text_input("Veículo", key=f"ag_veic_{ver}")
         with v2:
-            placa = st.text_input("Placa", placeholder="RNP-4C12")
+            placa = st.text_input("Placa", key=f"ag_placa_{ver}")
 
         d1, d2 = st.columns(2)
         with d1:
-            data_ag = st.date_input("Data", value=date.today(), format="DD/MM/YYYY")
+            data_ag = st.date_input("Data", value=hoje, format="DD/MM/YYYY", key=f"ag_data_{ver}")
         with d2:
-            hora_ag = st.time_input("Horário", value=time(9, 0))
+            hora_ag = st.time_input("Horário", value=time(9, 0), key=f"ag_hora_{ver}")
 
         salvar_ag = st.form_submit_button("📅 Salvar na Agenda", type="primary", use_container_width=True)
         if salvar_ag:
@@ -1005,23 +1037,34 @@ def tela_agenda():
                             "status": "Agendada",
                         }
                     ).execute()
-                    st.success("Agendamento salvo na agenda!")
+                    st.session_state.form_ag_ver += 1
+                    # Direciona automaticamente o filtro para a data agendada
+                    if data_ag == hoje:
+                        st.session_state.agenda_filtro = "Hoje"
+                        st.session_state.agenda_data_busca = None
+                    elif data_ag == amanha:
+                        st.session_state.agenda_filtro = "Amanhã"
+                        st.session_state.agenda_data_busca = None
+                    else:
+                        st.session_state.agenda_filtro = "Data"
+                        st.session_state.agenda_data_busca = data_ag
+                    st.session_state.aviso_sucesso = (
+                        f"Agendamento salvo para {data_ag.strftime('%d/%m/%Y')} às {hora_ag.strftime('%H:%M')}!"
+                    )
                     st.rerun()
                 except Exception as e:
                     st.error(f"Erro ao salvar agendamento: {e}")
 
     st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
 
-    # Filtros rápidos (Hoje / Amanhã / Esta Semana / Todas)
-    hoje = date.today()
-    amanha = hoje + timedelta(days=1)
+    # Filtros: Hoje, Amanhã, Esta Semana
     inicio_semana = hoje - timedelta(days=hoje.weekday())
     fim_semana = inicio_semana + timedelta(days=6)
 
-    fc1, fc2, fc3, fc4 = st.columns(4)
-    for col, nome_f in [(fc1, "Hoje"), (fc2, "Amanhã"), (fc3, "Esta Semana"), (fc4, "Todas")]:
+    fc1, fc2, fc3 = st.columns(3)
+    for col, nome_f in [(fc1, "Hoje"), (fc2, "Amanhã"), (fc3, "Esta Semana")]:
         with col:
-            ativo = st.session_state.agenda_filtro == nome_f and not st.session_state.agenda_dia_selecionado
+            ativo = st.session_state.agenda_filtro == nome_f
             if st.button(
                 nome_f,
                 key=f"flt_{nome_f}",
@@ -1029,49 +1072,52 @@ def tela_agenda():
                 use_container_width=True,
             ):
                 st.session_state.agenda_filtro = nome_f
-                st.session_state.agenda_dia_selecionado = None
+                st.session_state.agenda_data_busca = None
                 st.rerun()
 
-    # Faixa dos 7 dias da semana
-    cols_dias = st.columns(7)
-    for i in range(7):
-        dia_i = inicio_semana + timedelta(days=i)
-        label_dia = f"{DIAS_SEMANA_PT[i]}\n{dia_i.day:02d}"
-        selecionado = st.session_state.agenda_dia_selecionado == dia_i.isoformat()
-        with cols_dias[i]:
-            if st.button(
-                label_dia,
-                key=f"dia_sem_{dia_i.isoformat()}",
-                type="primary" if selecionado else "secondary",
-                use_container_width=True,
-            ):
-                st.session_state.agenda_dia_selecionado = dia_i.isoformat()
+    # Pesquisa direta por data no calendário
+    with st.container(border=True):
+        pc1, pc2 = st.columns([2.4, 1.2])
+        with pc1:
+            valor_cal = st.session_state.agenda_data_busca or hoje
+            data_pesquisa = st.date_input(
+                "Pesquisar uma data no calendário",
+                value=valor_cal,
+                format="DD/MM/YYYY",
+                key="cal_pesquisa_agenda",
+            )
+        with pc2:
+            st.markdown("<div style='height:27px;'></div>", unsafe_allow_html=True)
+            if st.button("🔍 Ver Data", key="btn_ver_data_cal", type="primary", use_container_width=True):
+                st.session_state.agenda_filtro = "Data"
+                st.session_state.agenda_data_busca = data_pesquisa
                 st.rerun()
 
     agendamentos = carregar_agendamentos(apenas_agendadas=True)
 
     filtrados = []
-    for ag in agendamentos:
-        d_str = str(ag.get("data_agendamento", ""))[:10]
-        if st.session_state.agenda_dia_selecionado:
-            if d_str == st.session_state.agenda_dia_selecionado:
-                filtrados.append(ag)
-        elif st.session_state.agenda_filtro == "Hoje":
-            if d_str == hoje.isoformat():
-                filtrados.append(ag)
-        elif st.session_state.agenda_filtro == "Amanhã":
-            if d_str == amanha.isoformat():
-                filtrados.append(ag)
-        elif st.session_state.agenda_filtro == "Esta Semana":
-            if inicio_semana.isoformat() <= d_str <= fim_semana.isoformat():
-                filtrados.append(ag)
-        else:
-            filtrados.append(ag)
+    if st.session_state.agenda_filtro == "Hoje":
+        titulo_lista = f"Hoje ({hoje.strftime('%d/%m/%Y')})"
+        filtrados = [ag for ag in agendamentos if str(ag.get("data_agendamento", ""))[:10] == hoje.isoformat()]
+    elif st.session_state.agenda_filtro == "Amanhã":
+        titulo_lista = f"Amanhã ({amanha.strftime('%d/%m/%Y')})"
+        filtrados = [ag for ag in agendamentos if str(ag.get("data_agendamento", ""))[:10] == amanha.isoformat()]
+    elif st.session_state.agenda_filtro == "Esta Semana":
+        titulo_lista = f"Esta Semana ({inicio_semana.strftime('%d/%m')} a {fim_semana.strftime('%d/%m')})"
+        filtrados = [
+            ag
+            for ag in agendamentos
+            if inicio_semana.isoformat() <= str(ag.get("data_agendamento", ""))[:10] <= fim_semana.isoformat()
+        ]
+    else:
+        dt_b = st.session_state.agenda_data_busca or hoje
+        titulo_lista = f"Data selecionada ({dt_b.strftime('%d/%m/%Y')})"
+        filtrados = [ag for ag in agendamentos if str(ag.get("data_agendamento", ""))[:10] == dt_b.isoformat()]
 
-    st.markdown(f"#### Vistorias Agendadas ({len(filtrados)})")
+    st.markdown(f"#### Vistorias Agendadas — {titulo_lista} ({len(filtrados)})")
 
     if not filtrados:
-        st.info("Nenhuma vistoria agendada para este filtro.")
+        st.info("Nenhuma vistoria agendada para este período.")
         return
 
     for ag in filtrados:
@@ -1090,7 +1136,7 @@ def tela_agenda():
             <div class="cv-card">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
                     <span style="color:var(--muted);font-size:0.85rem;font-weight:600;">
-                        {fmt_data_curta(ag.get('data_agendamento'))} • {ag.get('hora_agendamento', '')}
+                        📅 {fmt_data_br(ag.get('data_agendamento'))} • ⏰ {ag.get('hora_agendamento', '')}
                     </span>
                     <span class="{badge_cls}">{emp_nome}</span>
                 </div>
@@ -1113,7 +1159,7 @@ def tela_agenda():
         bc1, bc2 = st.columns([4, 1])
         with bc1:
             if st.button(
-                "📋 Iniciar Vistoria",
+                "📋 Abrir Ordem de Serviço",
                 key=f"iniciar_{ag['id']}",
                 type="primary",
                 use_container_width=True,
@@ -1125,95 +1171,100 @@ def tela_agenda():
                     "cliente_nome": ag.get("cliente_nome", ""),
                     "veiculo": ag.get("veiculo", ""),
                     "placa": ag.get("placa", ""),
-                    "data_vistoria": ag.get("data_agendamento", date.today().isoformat()),
+                    "data_vistoria": ag.get("data_agendamento", hoje.isoformat()),
                     "valor_padrao": float(emp_info.get("valor_padrao") or 0.0),
                 }
-                st.session_state.pagina = "Vistorias"
+                st.session_state.form_os_ver += 1
+                st.session_state.pagina = "Ordem de Serviço"
                 st.rerun()
         with bc2:
             if st.button("🗑️", key=f"del_ag_{ag['id']}", help="Remover agendamento", use_container_width=True):
                 supabase.table("agendamentos").delete().eq("id", ag["id"]).execute()
+                st.session_state.aviso_sucesso = "Agendamento removido."
                 st.rerun()
 
 
 # =========================================================
-# TELA 4: REGISTRAR / CONCLUIR OS
+# TELA 4: ORDEM DE SERVIÇO
 # =========================================================
-def tela_vistorias():
-    st.markdown("### ✅ Registrar / Concluir OS")
+def tela_ordem_servico():
+    st.markdown("### ✅ Ordem de Serviço")
+    mostrar_aviso_pendente()
+
     empresas = carregar_empresas()
     nomes_empresas = [e["nome"] for e in empresas]
     mapa_empresas = {e["nome"]: e for e in empresas}
+    hoje = hoje_br()
+    ver = st.session_state.form_os_ver
 
     imp = st.session_state.get("os_importada")
 
     if imp:
         st.markdown(
-            '<div class="cv-banner-import">📅 Dados importados da Agenda</div>',
+            '<div class="cv-banner-import">📅 Dados carregados da Agenda</div>',
             unsafe_allow_html=True,
         )
-        if st.button("Limpar importação (preencher OS avulsa)", use_container_width=True):
+        if st.button("Limpar dados importados (nova OS avulsa)", use_container_width=True):
             st.session_state.os_importada = None
+            st.session_state.form_os_ver += 1
             st.rerun()
 
     with st.container(border=True):
         emp_padrao = imp["empresa_nome"] if imp else (nomes_empresas[0] if nomes_empresas else "")
         if nomes_empresas:
             idx_emp = nomes_empresas.index(emp_padrao) if emp_padrao in nomes_empresas else 0
-            empresa_sel = st.selectbox("Empresa", nomes_empresas, index=idx_emp)
+            empresa_sel = st.selectbox("Empresa", nomes_empresas, index=idx_emp, key=f"os_emp_{ver}")
             valor_sugerido = float(mapa_empresas[empresa_sel].get("valor_padrao") or 0.0)
             if imp and empresa_sel == imp.get("empresa_nome") and imp.get("valor_padrao"):
                 valor_sugerido = float(imp["valor_padrao"])
         else:
-            empresa_sel = st.text_input("Empresa", value=emp_padrao, placeholder="Ex: ABG Vistoria")
+            empresa_sel = st.text_input("Empresa", value=emp_padrao, key=f"os_emp_txt_{ver}")
             valor_sugerido = float(imp["valor_padrao"]) if imp else 0.0
 
         cliente_val = st.text_input(
             "Cliente / Segurado (opcional)",
             value=imp.get("cliente_nome", "") if imp else "",
-            placeholder="Nome do cliente",
+            key=f"os_cli_{ver}",
         )
         veiculo_val = st.text_input(
             "Veículo",
             value=imp.get("veiculo", "") if imp else "",
-            placeholder="Ex: Fiat Argo Branco",
+            key=f"os_veic_{ver}",
         )
         placa_val = st.text_input(
             "Placa",
             value=imp.get("placa", "") if imp else "",
-            placeholder="Ex: RNP-4C12",
+            key=f"os_placa_{ver}",
         )
 
         try:
             data_ini = (
                 datetime.strptime(str(imp["data_vistoria"])[:10], "%Y-%m-%d").date()
                 if imp and imp.get("data_vistoria")
-                else date.today()
+                else hoje
             )
         except ValueError:
-            data_ini = date.today()
+            data_ini = hoje
 
         c1, c2 = st.columns(2)
         with c1:
-            data_val = st.date_input("Data", value=data_ini, format="DD/MM/YYYY")
+            data_val = st.date_input("Data", value=data_ini, format="DD/MM/YYYY", key=f"os_data_{ver}")
         with c2:
-            chave_val = f"valor_os_{empresa_sel}_{imp['agendamento_id'] if imp else 'avulsa'}"
             valor_val = st.number_input(
                 "Valor do Serviço (R$)",
                 min_value=0.0,
                 value=valor_sugerido,
                 step=1.0,
                 format="%.2f",
-                key=chave_val,
+                key=f"os_valor_{ver}_{empresa_sel}",
             )
 
-        # Seletor visual Nova / Renovação igual à tela do modelo
         st.markdown("**Tipo de Vistoria**")
         tv1, tv2 = st.columns(2)
         with tv1:
             if st.button(
                 "Nova",
-                key="btn_tipo_nova",
+                key=f"btn_tipo_nova_{ver}",
                 type="primary" if st.session_state.tipo_vistoria_os == "Nova" else "secondary",
                 use_container_width=True,
             ):
@@ -1222,7 +1273,7 @@ def tela_vistorias():
         with tv2:
             if st.button(
                 "Renovação",
-                key="btn_tipo_renov",
+                key=f"btn_tipo_renov_{ver}",
                 type="primary" if st.session_state.tipo_vistoria_os == "Renovação" else "secondary",
                 use_container_width=True,
             ):
@@ -1235,6 +1286,7 @@ def tela_vistorias():
             ["Galeria / Arquivo", "Câmera"],
             horizontal=True,
             label_visibility="collapsed",
+            key=f"os_modo_foto_{ver}",
         )
         foto_arquivo = None
         if modo_foto == "Galeria / Arquivo":
@@ -1242,9 +1294,10 @@ def tela_vistorias():
                 "Anexar foto do veículo",
                 type=["jpg", "jpeg", "png", "webp"],
                 label_visibility="collapsed",
+                key=f"os_upload_{ver}",
             )
         else:
-            foto_arquivo = st.camera_input("Capturar foto do veículo")
+            foto_arquivo = st.camera_input("Capturar foto do veículo", key=f"os_cam_{ver}")
 
         if foto_arquivo is not None:
             p1, p2 = st.columns([1, 2])
@@ -1255,15 +1308,13 @@ def tela_vistorias():
                     '<span class="cv-badge-purple">✔ 1 foto anexada</span>',
                     unsafe_allow_html=True,
                 )
-                st.caption("Envie outro arquivo acima se quiser alterar a foto.")
 
-    # Botão VERMELHO Concluir OS
     st.markdown('<span class="marker-red"></span>', unsafe_allow_html=True)
-    concluir = st.button("✔ Concluir OS", key="btn_concluir_os_red", use_container_width=True)
+    concluir = st.button("✔ Concluir Ordem de Serviço", key=f"btn_concluir_os_{ver}", use_container_width=True)
 
     if concluir:
         if not empresa_sel.strip() or not veiculo_val.strip() or not placa_val.strip():
-            st.warning("Preencha Empresa, Veículo e Placa antes de concluir a OS.")
+            st.warning("Preencha Empresa, Veículo e Placa antes de concluir.")
         else:
             foto_b64 = None
             if foto_arquivo is not None:
@@ -1294,10 +1345,12 @@ def tela_vistorias():
                         "id", imp["agendamento_id"]
                     ).execute()
                 st.session_state.os_importada = None
-                st.success("Ordem de Serviço concluída e enviada para o Financeiro!")
+                st.session_state.tipo_vistoria_os = "Nova"
+                st.session_state.form_os_ver += 1
+                st.session_state.aviso_sucesso = "Ordem de Serviço concluída e enviada para o Financeiro!"
                 st.rerun()
             except Exception as e:
-                st.error(f"Erro ao concluir OS: {e}")
+                st.error(f"Erro ao concluir Ordem de Serviço: {e}")
 
 
 # =========================================================
@@ -1305,6 +1358,7 @@ def tela_vistorias():
 # =========================================================
 def tela_financeiro():
     st.markdown("### 💰 Financeiro & Calendário")
+    mostrar_aviso_pendente()
 
     nav1, nav2, nav3 = st.columns([1, 3.2, 1])
     with nav1:
@@ -1409,10 +1463,10 @@ def tela_financeiro():
                     supabase.table("vistorias").update(
                         {
                             "status_pagamento": "Recebido",
-                            "data_recebimento": date.today().isoformat(),
+                            "data_recebimento": hoje_br().isoformat(),
                         }
                     ).in_("id", ids).execute()
-                    st.success(f"Baixa registrada para {emp_nome}!")
+                    st.session_state.aviso_sucesso = f"Baixa registrada para {emp_nome}!"
                     st.rerun()
             with col_pdf:
                 if PDF_DISPONIVEL:
@@ -1470,14 +1524,17 @@ def tela_financeiro():
                 supabase.table("vistorias").update(
                     {"status_pagamento": "Pendente", "data_recebimento": None}
                 ).in_("id", ids).execute()
+                st.session_state.aviso_sucesso = f"Baixa de {emp_nome} desfeita."
                 st.rerun()
 
 
 # =========================================================
-# TELA 6: HISTÓRICO & RELATÓRIOS PDF
+# TELA 6: RELATÓRIOS EM PDF
 # =========================================================
-def tela_historico():
-    st.markdown("### 📄 Histórico de OS & PDFs")
+def tela_pdf():
+    st.markdown("### 📄 Relatórios em PDF")
+    mostrar_aviso_pendente()
+
     if not PDF_DISPONIVEL:
         st.warning("Adicione `fpdf2` no seu arquivo `requirements.txt` para habilitar o download de PDFs.")
 
@@ -1501,7 +1558,7 @@ def tela_historico():
     ]
 
     if PDF_DISPONIVEL and filtradas:
-        pdf_lote = gerar_pdf_lote(filtradas, "Histórico Filtrado", f_emp)
+        pdf_lote = gerar_pdf_lote(filtradas, "Relatório Filtrado", f_emp)
         st.download_button(
             f"📥 Baixar PDF em Lote ({len(filtradas)} OS)",
             data=pdf_lote,
@@ -1533,7 +1590,7 @@ def tela_historico():
             """,
             unsafe_allow_html=True,
         )
-        with st.expander(f"Ver foto / PDF / opções da OS #{v['id']}"):
+        with st.expander(f"Ver foto / PDF / opções — OS #{v['id']}"):
             if v.get("cliente_nome"):
                 st.write(f"**Cliente:** {v['cliente_nome']}")
             if v.get("foto_base64"):
@@ -1556,6 +1613,7 @@ def tela_historico():
             with a2:
                 if st.button("🗑️ Excluir", key=f"del_os_{v['id']}", use_container_width=True):
                     supabase.table("vistorias").delete().eq("id", v["id"]).execute()
+                    st.session_state.aviso_sucesso = f"OS #{v['id']} excluída."
                     st.rerun()
 
 
@@ -1567,8 +1625,8 @@ def main():
         tela_login()
         return
 
-    # Barra superior: Marca + Alternar Claro/Escuro + Sair
-    top1, top2, top3 = st.columns([2.8, 1.2, 1.0])
+    # Barra superior sempre visível: Marca + Alternar Claro/Escuro + Sair
+    top1, top2, top3 = st.columns([3.0, 1.2, 1.0])
     with top1:
         st.markdown(
             '<div class="brand-bar">🚗 Controle de Vistorias</div>',
@@ -1582,15 +1640,15 @@ def main():
             st.session_state.os_importada = None
             st.rerun()
 
-    # Navegação principal (5 abas)
+    # Navegação principal com nomes completos
     abas = [
         ("Agenda", "📅 Agenda"),
-        ("Vistorias", "✅ OS"),
-        ("Financeiro", "💰 Financ."),
+        ("Ordem de Serviço", "✅ Ordem de Serviço"),
+        ("Financeiro", "💰 Financeiro"),
         ("Empresas", "🤝 Empresas"),
-        ("Histórico", "📄 PDFs"),
+        ("PDF", "📄 PDF"),
     ]
-    cols_nav = st.columns(len(abas))
+    cols_nav = st.columns([1.0, 1.85, 1.25, 1.15, 0.85])
     for col, (chave, rotulo) in zip(cols_nav, abas):
         with col:
             tipo = "primary" if st.session_state.pagina == chave else "secondary"
@@ -1598,18 +1656,18 @@ def main():
                 st.session_state.pagina = chave
                 st.rerun()
 
-    st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
 
     if st.session_state.pagina == "Empresas":
         tela_empresas()
     elif st.session_state.pagina == "Agenda":
         tela_agenda()
-    elif st.session_state.pagina == "Vistorias":
-        tela_vistorias()
+    elif st.session_state.pagina == "Ordem de Serviço":
+        tela_ordem_servico()
     elif st.session_state.pagina == "Financeiro":
         tela_financeiro()
-    elif st.session_state.pagina == "Histórico":
-        tela_historico()
+    elif st.session_state.pagina == "PDF":
+        tela_pdf()
 
 
 if __name__ == "__main__":
