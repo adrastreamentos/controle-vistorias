@@ -1,3 +1,5 @@
+import streamlit as st
+
 url_lida = st.secrets.get("SUPABASE_URL", "")
 chave_lida = st.secrets.get("SUPABASE_KEY", "")
 
