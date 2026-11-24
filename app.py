@@ -84,6 +84,8 @@ if "form_ag_ver" not in st.session_state:
     st.session_state.form_ag_ver = 0
 if "form_os_ver" not in st.session_state:
     st.session_state.form_os_ver = 0
+if "fin_edit_ver" not in st.session_state:
+    st.session_state.fin_edit_ver = 0
 if "aviso_sucesso" not in st.session_state:
     st.session_state.aviso_sucesso = None
 
@@ -579,6 +581,21 @@ def fmt_data_curta(data_str: str) -> str:
         return str(data_str)
 
 
+def parse_data(data_str: str) -> date:
+    try:
+        return datetime.strptime(str(data_str)[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return hoje_br()
+
+
+def parse_hora(hora_str: str) -> time:
+    try:
+        partes = str(hora_str or "09:00").split(":")
+        return time(int(partes[0]), int(partes[1]))
+    except (ValueError, IndexError, TypeError):
+        return time(9, 0)
+
+
 def link_whatsapp(telefone: str, mensagem: str = "") -> str:
     digitos = re.sub(r"\D", "", str(telefone or ""))
     if not digitos:
@@ -650,6 +667,109 @@ def carregar_vistorias(ano=None, mes=None):
     except Exception as e:
         st.error(f"Erro ao carregar vistorias: {e}")
         return []
+
+
+# =========================================================
+# FORMULÁRIO REUTILIZÁVEL DE EDIÇÃO / EXCLUSÃO DE OS
+# =========================================================
+def render_editor_os(vistoria: dict, nomes_empresas: list, prefixo_key: str):
+    ver_edit = st.session_state.fin_edit_ver
+    emp_atual = vistoria.get("empresa_nome") or ""
+    opcoes_emp = sorted({e for e in (nomes_empresas + [emp_atual]) if e})
+
+    with st.form(f"edit_os_{prefixo_key}_{vistoria['id']}_{ver_edit}"):
+        st.markdown(
+            f"**OS #{vistoria['id']} — {vistoria.get('veiculo', '')} ({vistoria.get('placa', '')})**"
+        )
+
+        if opcoes_emp:
+            idx_emp = opcoes_emp.index(emp_atual) if emp_atual in opcoes_emp else 0
+            e_emp = st.selectbox("Empresa", opcoes_emp, index=idx_emp)
+        else:
+            e_emp = st.text_input("Empresa", value=emp_atual)
+
+        c1, c2 = st.columns(2)
+        with c1:
+            e_cli = st.text_input("Cliente / Segurado", value=vistoria.get("cliente_nome") or "")
+        with c2:
+            e_veic = st.text_input("Veículo", value=vistoria.get("veiculo") or "")
+
+        c3, c4 = st.columns(2)
+        with c3:
+            e_placa = st.text_input("Placa", value=vistoria.get("placa") or "")
+        with c4:
+            e_data = st.date_input(
+                "Data da Vistoria",
+                value=parse_data(vistoria.get("data_vistoria")),
+                format="DD/MM/YYYY",
+            )
+
+        c5, c6, c7 = st.columns(3)
+        with c5:
+            e_valor = st.number_input(
+                "Valor (R$)",
+                min_value=0.0,
+                value=float(vistoria.get("valor") or 0.0),
+                step=1.0,
+                format="%.2f",
+            )
+        with c6:
+            tipos = ["Nova", "Renovação"]
+            t_atual = vistoria.get("tipo_vistoria") or "Nova"
+            idx_t = tipos.index(t_atual) if t_atual in tipos else 0
+            e_tipo = st.selectbox("Tipo", tipos, index=idx_t)
+        with c7:
+            statuses = ["Pendente", "Recebido"]
+            s_atual = vistoria.get("status_pagamento") or "Pendente"
+            idx_s = statuses.index(s_atual) if s_atual in statuses else 0
+            e_status = st.selectbox("Status", statuses, index=idx_s)
+
+        b1, b2 = st.columns(2)
+        with b1:
+            salvar_ed = st.form_submit_button(
+                "💾 Salvar Correção", type="primary", use_container_width=True
+            )
+        with b2:
+            excluir_os = st.form_submit_button("🗑️ Excluir OS", use_container_width=True)
+
+        if salvar_ed:
+            if not e_emp.strip() or not e_veic.strip() or not e_placa.strip():
+                st.warning("Preencha Empresa, Veículo e Placa.")
+            else:
+                nova_data_rec = vistoria.get("data_recebimento")
+                if e_status == "Recebido" and not nova_data_rec:
+                    nova_data_rec = hoje_br().isoformat()
+                elif e_status == "Pendente":
+                    nova_data_rec = None
+
+                try:
+                    supabase.table("vistorias").update(
+                        {
+                            "empresa_nome": e_emp.strip(),
+                            "cliente_nome": e_cli.strip(),
+                            "veiculo": e_veic.strip(),
+                            "placa": e_placa.strip().upper(),
+                            "data_vistoria": e_data.isoformat(),
+                            "valor": float(e_valor),
+                            "tipo_vistoria": e_tipo,
+                            "status_pagamento": e_status,
+                            "data_recebimento": nova_data_rec,
+                        }
+                    ).eq("id", vistoria["id"]).execute()
+                    st.session_state.fin_edit_ver += 1
+                    st.session_state.aviso_sucesso = f"OS #{vistoria['id']} atualizada com sucesso!"
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao atualizar OS: {e}")
+
+        if excluir_os:
+            try:
+                supabase.table("vistorias").delete().eq("id", vistoria["id"]).execute()
+                st.session_state.fin_edit_ver += 1
+                st.session_state.aviso_sucesso = f"OS #{vistoria['id']} excluída com sucesso!"
+                st.rerun()
+            except Exception as e:
+                st.error(f"Erro ao excluir OS: {e}")
 
 
 # =========================================================
@@ -975,7 +1095,10 @@ def tela_empresas():
                 if excluir:
                     supabase.table("vistorias_empresas").delete().eq("id", emp["id"]).execute()
                     st.session_state.form_emp_ver += 1
-                    st.session_state.aviso_sucesso = f"Empresa '{emp['nome']}' removida."
+                    st.session_state.aviso_sucesso = (
+                        f"Empresa '{emp['nome']}' removida do cadastro. "
+                        "Se houver OS de teste dela no Financeiro, você pode excluí-la direto na aba Financeiro."
+                    )
                     st.rerun()
 
 
@@ -1038,7 +1161,6 @@ def tela_agenda():
                         }
                     ).execute()
                     st.session_state.form_ag_ver += 1
-                    # Direciona automaticamente o filtro para a data agendada
                     if data_ag == hoje:
                         st.session_state.agenda_filtro = "Hoje"
                         st.session_state.agenda_data_busca = None
@@ -1057,7 +1179,6 @@ def tela_agenda():
 
     st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
 
-    # Filtros: Hoje, Amanhã, Esta Semana
     inicio_semana = hoje - timedelta(days=hoje.weekday())
     fim_semana = inicio_semana + timedelta(days=6)
 
@@ -1075,7 +1196,6 @@ def tela_agenda():
                 st.session_state.agenda_data_busca = None
                 st.rerun()
 
-    # Pesquisa direta por data no calendário
     with st.container(border=True):
         pc1, pc2 = st.columns([2.4, 1.2])
         with pc1:
@@ -1183,6 +1303,53 @@ def tela_agenda():
                 st.session_state.aviso_sucesso = "Agendamento removido."
                 st.rerun()
 
+        with st.expander(f"✏️ Corrigir agendamento — {ag.get('veiculo', '')} ({ag.get('placa', '')})"):
+            opcoes_ag_emp = sorted({e for e in (nomes_empresas + [emp_nome]) if e})
+            with st.form(f"edit_ag_{ag['id']}_{ver}"):
+                if opcoes_ag_emp:
+                    idx_ae = opcoes_ag_emp.index(emp_nome) if emp_nome in opcoes_ag_emp else 0
+                    ea_emp = st.selectbox("Empresa", opcoes_ag_emp, index=idx_ae)
+                else:
+                    ea_emp = st.text_input("Empresa", value=emp_nome)
+
+                ac1, ac2 = st.columns(2)
+                with ac1:
+                    ea_cli = st.text_input("Cliente", value=ag.get("cliente_nome") or "")
+                with ac2:
+                    ea_wa = st.text_input("WhatsApp do Cliente", value=ag.get("cliente_whatsapp") or "")
+
+                av1, av2 = st.columns([2, 1])
+                with av1:
+                    ea_veic = st.text_input("Veículo", value=ag.get("veiculo") or "")
+                with av2:
+                    ea_placa = st.text_input("Placa", value=ag.get("placa") or "")
+
+                ad1, ad2 = st.columns(2)
+                with ad1:
+                    ea_data = st.date_input(
+                        "Data",
+                        value=parse_data(ag.get("data_agendamento")),
+                        format="DD/MM/YYYY",
+                    )
+                with ad2:
+                    ea_hora = st.time_input("Horário", value=parse_hora(ag.get("hora_agendamento")))
+
+                if st.form_submit_button("💾 Salvar Alterações", type="primary", use_container_width=True):
+                    supabase.table("agendamentos").update(
+                        {
+                            "empresa_nome": ea_emp.strip(),
+                            "cliente_nome": ea_cli.strip(),
+                            "cliente_whatsapp": ea_wa.strip(),
+                            "veiculo": ea_veic.strip(),
+                            "placa": ea_placa.strip().upper(),
+                            "data_agendamento": ea_data.isoformat(),
+                            "hora_agendamento": ea_hora.strftime("%H:%M"),
+                        }
+                    ).eq("id", ag["id"]).execute()
+                    st.session_state.form_ag_ver += 1
+                    st.session_state.aviso_sucesso = "Agendamento atualizado!"
+                    st.rerun()
+
 
 # =========================================================
 # TELA 4: ORDEM DE SERVIÇO
@@ -1237,14 +1404,7 @@ def tela_ordem_servico():
             key=f"os_placa_{ver}",
         )
 
-        try:
-            data_ini = (
-                datetime.strptime(str(imp["data_vistoria"])[:10], "%Y-%m-%d").date()
-                if imp and imp.get("data_vistoria")
-                else hoje
-            )
-        except ValueError:
-            data_ini = hoje
+        data_ini = parse_data(imp["data_vistoria"]) if (imp and imp.get("data_vistoria")) else hoje
 
         c1, c2 = st.columns(2)
         with c1:
@@ -1383,6 +1543,7 @@ def tela_financeiro():
 
     vistorias = carregar_vistorias(st.session_state.fin_ano, st.session_state.fin_mes)
     empresas = carregar_empresas()
+    nomes_empresas = [e["nome"] for e in empresas]
     dias_pgto = {e["nome"]: int(e.get("dia_pagamento") or 15) for e in empresas}
 
     pendentes = [v for v in vistorias if v.get("status_pagamento") != "Recebido"]
@@ -1481,6 +1642,10 @@ def tela_financeiro():
                         use_container_width=True,
                     )
 
+            with st.expander(f"✏️ Corrigir ou Excluir OS — {emp_nome} ({qtd})"):
+                for os_item in lista_os:
+                    render_editor_os(os_item, nomes_empresas, prefixo_key="fin_pend")
+
     st.markdown("#### ✅ Pagamentos Recebidos (Baixas)")
     grupos_rec = {}
     for v in recebidas:
@@ -1527,6 +1692,10 @@ def tela_financeiro():
                 st.session_state.aviso_sucesso = f"Baixa de {emp_nome} desfeita."
                 st.rerun()
 
+            with st.expander(f"✏️ Corrigir ou Excluir OS recebidas — {emp_nome} ({qtd})"):
+                for os_item in lista_os:
+                    render_editor_os(os_item, nomes_empresas, prefixo_key="fin_rec")
+
 
 # =========================================================
 # TELA 6: RELATÓRIOS EM PDF
@@ -1539,6 +1708,9 @@ def tela_pdf():
         st.warning("Adicione `fpdf2` no seu arquivo `requirements.txt` para habilitar o download de PDFs.")
 
     todas = carregar_vistorias()
+    empresas = carregar_empresas()
+    nomes_empresas = [e["nome"] for e in empresas]
+
     if not todas:
         st.info("Nenhuma vistoria concluída registrada até o momento.")
         return
@@ -1590,7 +1762,7 @@ def tela_pdf():
             """,
             unsafe_allow_html=True,
         )
-        with st.expander(f"Ver foto / PDF / opções — OS #{v['id']}"):
+        with st.expander(f"Ver foto / PDF / Corrigir / Excluir — OS #{v['id']}"):
             if v.get("cliente_nome"):
                 st.write(f"**Cliente:** {v['cliente_nome']}")
             if v.get("foto_base64"):
@@ -1598,23 +1770,19 @@ def tela_pdf():
             else:
                 st.caption("Sem foto anexada.")
 
-            a1, a2 = st.columns([3, 1])
-            with a1:
-                if PDF_DISPONIVEL:
-                    pdf_ind = gerar_pdf_individual(v)
-                    st.download_button(
-                        "📄 Baixar PDF Individual",
-                        data=pdf_ind,
-                        file_name=f"OS_{v['id']}_{v['placa']}.pdf",
-                        mime="application/pdf",
-                        key=f"pdf_ind_{v['id']}",
-                        use_container_width=True,
-                    )
-            with a2:
-                if st.button("🗑️ Excluir", key=f"del_os_{v['id']}", use_container_width=True):
-                    supabase.table("vistorias").delete().eq("id", v["id"]).execute()
-                    st.session_state.aviso_sucesso = f"OS #{v['id']} excluída."
-                    st.rerun()
+            if PDF_DISPONIVEL:
+                pdf_ind = gerar_pdf_individual(v)
+                st.download_button(
+                    "📄 Baixar PDF Individual",
+                    data=pdf_ind,
+                    file_name=f"OS_{v['id']}_{v['placa']}.pdf",
+                    mime="application/pdf",
+                    key=f"pdf_ind_{v['id']}",
+                    use_container_width=True,
+                )
+
+            st.markdown("---")
+            render_editor_os(v, nomes_empresas, prefixo_key="pdf_tab")
 
 
 # =========================================================
@@ -1625,7 +1793,6 @@ def main():
         tela_login()
         return
 
-    # Barra superior sempre visível: Marca + Alternar Claro/Escuro + Sair
     top1, top2, top3 = st.columns([3.0, 1.2, 1.0])
     with top1:
         st.markdown(
@@ -1640,7 +1807,6 @@ def main():
             st.session_state.os_importada = None
             st.rerun()
 
-    # Navegação principal com nomes completos
     abas = [
         ("Agenda", "📅 Agenda"),
         ("Ordem de Serviço", "✅ Ordem de Serviço"),
