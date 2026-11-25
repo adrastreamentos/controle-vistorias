@@ -6,6 +6,7 @@ import math
 import os
 import re
 import tempfile
+import time as time_mod
 import urllib.request
 from datetime import date, datetime, time, timedelta, timezone
 from urllib.parse import quote, urlencode
@@ -118,6 +119,10 @@ if "fin_edit_ver" not in st.session_state:
     st.session_state.fin_edit_ver = 0
 if "aviso_sucesso" not in st.session_state:
     st.session_state.aviso_sucesso = None
+if "geo_cache" not in st.session_state:
+    st.session_state.geo_cache = {}
+if "rota_cache" not in st.session_state:
+    st.session_state.rota_cache = {}
 
 
 # =========================================================
@@ -355,10 +360,37 @@ def aplicar_tema(modo: str):
             border-bottom: 1px dashed var(--border);
             font-size: 0.88rem;
             color: var(--text);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 6px;
         }}
         .cv-route-item:last-child {{
             border-bottom: none;
             padding-bottom: 0;
+        }}
+        .cv-dist-pill {{
+            background: var(--purple-soft-bg);
+            color: var(--purple-soft-text);
+            border: 1px solid var(--purple-soft-border);
+            font-weight: 800;
+            font-size: 0.8rem;
+            padding: 4px 10px;
+            border-radius: 10px;
+            white-space: nowrap;
+            display: inline-block;
+        }}
+        .cv-dist-pill-closest {{
+            background: var(--green-badge-bg);
+            color: var(--green-badge-text);
+            border: 1px solid var(--green-card-border);
+            font-weight: 800;
+            font-size: 0.8rem;
+            padding: 4px 10px;
+            border-radius: 10px;
+            white-space: nowrap;
+            display: inline-block;
         }}
         .cv-card-title {{
             font-weight: 700;
@@ -623,8 +655,8 @@ def aplicar_tema(modo: str):
             color: #FFFFFF !important;
             text-decoration: none !important;
             font-weight: 700;
-            font-size: 0.8rem;
-            padding: 5px 11px;
+            font-size: 0.78rem;
+            padding: 5px 10px;
             border-radius: 999px;
             white-space: nowrap;
         }}
@@ -641,8 +673,8 @@ def aplicar_tema(modo: str):
             color: #FFFFFF !important;
             text-decoration: none !important;
             font-weight: 700;
-            font-size: 0.8rem;
-            padding: 5px 11px;
+            font-size: 0.78rem;
+            padding: 5px 10px;
             border-radius: 999px;
             white-space: nowrap;
         }}
@@ -695,6 +727,15 @@ def fmt_km(km: float) -> str:
     return f"{km:.1f}".replace(".", ",") + " km"
 
 
+def fmt_tempo(minutos: int) -> str:
+    m = max(1, int(minutos or 1))
+    if m >= 60:
+        h = m // 60
+        r = m % 60
+        return f"{h}h{r:02d}" if r else f"{h}h"
+    return f"{m} min"
+
+
 def fmt_data_br(data_str: str) -> str:
     if not data_str:
         return "-"
@@ -726,6 +767,11 @@ def parse_hora(hora_str: str) -> time:
         return time(int(partes[0]), int(partes[1]))
     except (ValueError, IndexError, TypeError):
         return time(8, 0)
+
+
+def normalizar_hora(hora_str: str) -> str:
+    t = parse_hora(hora_str)
+    return t.strftime("%H:%M")
 
 
 def extrair_hora_int(hora_str: str) -> int:
@@ -804,7 +850,7 @@ def mostrar_aviso_pendente():
 
 
 # =========================================================
-# GEOLOCALIZAÇÃO E CÁLCULO DE DISTÂNCIA (PONTO BASE -> CLIENTE)
+# GEOLOCALIZAÇÃO E DISTÂNCIA (PHOTON + VIACEP + NOMINATIM + OSRM)
 # =========================================================
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371.0
@@ -816,14 +862,74 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
+def _normalizar_endereco_br(texto: str) -> str:
+    t = str(texto or "").strip()
+    t = re.sub(r"\b[Rr]\.\s*", "Rua ", t)
+    t = re.sub(r"\b[Aa][Vv]\.\s*", "Avenida ", t)
+    t = re.sub(r"\b[Tt][Vv]\.\s*", "Travessa ", t)
+    t = re.sub(r"\b[Pp][çc]\.\s*", "Praça ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def _extrair_contexto_cidade(endereco_base: str) -> str:
+    partes = [p.strip() for p in str(endereco_base or "").split(",") if p.strip()]
+    if len(partes) >= 2:
+        return ", ".join(partes[-2:])
+    return ""
+
+
+def _resolver_cep_viacep(texto: str) -> str:
+    m = re.search(r"\b(\d{5})-?(\d{3})\b", str(texto or ""))
+    if not m:
+        return ""
+    cep = m.group(1) + m.group(2)
+    try:
+        req = urllib.request.Request(
+            f"https://viacep.com.br/ws/{cep}/json/",
+            headers={"User-Agent": "ControleDeVistoriasAD/2.0"},
+        )
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            d = json.loads(resp.read().decode("utf-8"))
+            if not d.get("erro"):
+                partes = [d.get("logradouro"), d.get("bairro"), d.get("localidade"), d.get("uf")]
+                return ", ".join(p for p in partes if p)
+    except Exception:
+        return ""
+    return ""
+
+
+def _buscar_photon(query: str, bias_coord=None):
+    params = {"q": query, "limit": 1}
+    if bias_coord:
+        params["lat"] = f"{bias_coord[0]:.5f}"
+        params["lon"] = f"{bias_coord[1]:.5f}"
+    url = f"https://photon.komoot.io/api/?{urlencode(params)}"
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "ControleDeVistoriasAD/2.0"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            dados = json.loads(resp.read().decode("utf-8"))
+            feats = dados.get("features") or []
+            if feats:
+                lon, lat = feats[0]["geometry"]["coordinates"]
+                return float(lat), float(lon)
+    except Exception:
+        return None
+    return None
+
+
 def _buscar_nominatim(query: str):
     params = urlencode({"q": query, "format": "json", "limit": 1, "countrycodes": "br"})
     url = f"https://nominatim.openstreetmap.org/search?{params}"
     req = urllib.request.Request(
         url,
-        headers={"User-Agent": "ControleDeVistoriasAD/1.0 (contato@adrastreamento.com.br)"},
+        headers={"User-Agent": "ControleDeVistoriasAD/2.0 (adrastreamentos@gmail.com)"},
     )
     try:
+        time_mod.sleep(0.35)
         with urllib.request.urlopen(req, timeout=4) as resp:
             dados = json.loads(resp.read().decode("utf-8"))
             if dados:
@@ -833,59 +939,98 @@ def _buscar_nominatim(query: str):
     return None
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
-def geocodificar_endereco(endereco: str):
-    texto = str(endereco or "").strip()
-    if len(texto) < 4:
+def geocodificar_endereco(endereco: str, bias_coord=None, contexto_cidade: str = ""):
+    """Geocodifica endereço com cache em sessão (nunca trava cache em falha)."""
+    texto = _normalizar_endereco_br(endereco)
+    if len(texto) < 3:
         return None
 
-    tentativas = [texto]
+    chave = f"{texto.lower()}|{contexto_cidade.lower()}"
+    if chave in st.session_state.geo_cache:
+        return st.session_state.geo_cache[chave]
+
+    tentativas = []
+    via_cep = _resolver_cep_viacep(texto)
+    if via_cep:
+        tentativas.append(via_cep)
+
+    tentativas.append(texto)
+    if contexto_cidade and contexto_cidade.lower() not in texto.lower():
+        tentativas.append(f"{texto}, {contexto_cidade}")
     if "brasil" not in texto.lower():
         tentativas.append(f"{texto}, Brasil")
 
     sem_num = re.sub(r"\b(?:n[º°]?\.?\s*)?\d+[A-Za-z]?\b", "", texto).strip(" ,-")
     if sem_num and sem_num != texto and len(sem_num) >= 4:
         tentativas.append(sem_num)
-        if "brasil" not in sem_num.lower():
-            tentativas.append(f"{sem_num}, Brasil")
+        if contexto_cidade and contexto_cidade.lower() not in sem_num.lower():
+            tentativas.append(f"{sem_num}, {contexto_cidade}")
 
+    # 1º tenta Photon (rápido e tolerante a endereços brasileiros)
     for t in tentativas:
+        coord = _buscar_photon(t, bias_coord=bias_coord)
+        if coord:
+            st.session_state.geo_cache[chave] = coord
+            return coord
+
+    # 2º tenta Nominatim como reserva
+    for t in tentativas[:3]:
         coord = _buscar_nominatim(t)
         if coord:
+            st.session_state.geo_cache[chave] = coord
             return coord
+
     return None
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
 def calcular_distancia_rota(origem_end: str, destino_end: str):
-    """Retorna dict {'km': float, 'minutos': int|None, 'estimada': bool} ou None."""
-    c_orig = geocodificar_endereco(origem_end)
-    c_dest = geocodificar_endereco(destino_end)
-    if not c_orig or not c_dest:
+    """Retorna dict {'km': float, 'minutos': int, 'estimada': bool} ou None."""
+    orig = str(origem_end or "").strip()
+    dest = str(destino_end or "").strip()
+    if len(orig) < 3 or len(dest) < 3:
+        return None
+
+    chave_rota = f"{orig.lower()}=>{dest.lower()}"
+    if chave_rota in st.session_state.rota_cache:
+        return st.session_state.rota_cache[chave_rota]
+
+    c_orig = geocodificar_endereco(orig)
+    if not c_orig:
+        return None
+
+    ctx_cidade = _extrair_contexto_cidade(orig)
+    c_dest = geocodificar_endereco(dest, bias_coord=c_orig, contexto_cidade=ctx_cidade)
+    if not c_dest:
         return None
 
     lat1, lon1 = c_orig
     lat2, lon2 = c_dest
 
+    # Distância e tempo reais de carro via OSRM
     url = (
         f"https://router.project-osrm.org/route/v1/driving/"
         f"{lon1},{lat1};{lon2},{lat2}?overview=false"
     )
-    req = urllib.request.Request(url, headers={"User-Agent": "ControleDeVistoriasAD/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "ControleDeVistoriasAD/2.0"})
     try:
         with urllib.request.urlopen(req, timeout=3.5) as resp:
             dados = json.loads(resp.read().decode("utf-8"))
             if dados.get("code") == "Ok" and dados.get("routes"):
                 rota = dados["routes"][0]
                 km = float(rota["distance"]) / 1000.0
-                minutos = max(1, round(float(rota["duration"]) / 60.0))
-                return {"km": km, "minutos": minutos, "estimada": False}
+                minutos = max(2, round(float(rota["duration"]) / 60.0))
+                res = {"km": km, "minutos": minutos, "estimada": False}
+                st.session_state.rota_cache[chave_rota] = res
+                return res
     except Exception:
         pass
 
+    # Reserva confiável: distância viária estimada + velocidade urbana média
     km_est = _haversine_km(lat1, lon1, lat2, lon2) * 1.25
-    min_est = max(1, round((km_est / 32.0) * 60.0))
-    return {"km": km_est, "minutos": min_est, "estimada": True}
+    min_est = max(2, round((km_est / 30.0) * 60.0))
+    res = {"km": km_est, "minutos": min_est, "estimada": True}
+    st.session_state.rota_cache[chave_rota] = res
+    return res
 
 
 # =========================================================
@@ -920,6 +1065,26 @@ def carregar_agendamentos(apenas_agendadas=True):
     except Exception as e:
         st.error(f"Erro ao carregar agendamentos: {e}")
         return []
+
+
+def verificar_conflito_horario(data_iso: str, hora_hhmm: str, ignorar_id=None):
+    """Bloqueia qualquer agendamento no mesmo dia e horário (vistoria ou rastreamento)."""
+    alvo = normalizar_hora(hora_hhmm)
+    try:
+        res = (
+            supabase.table("agendamentos")
+            .select("id, empresa_nome, cliente_nome, veiculo, placa, hora_agendamento, tipo_servico, status")
+            .eq("data_agendamento", data_iso)
+            .execute()
+        )
+        for item in res.data or []:
+            if ignorar_id is not None and item.get("id") == ignorar_id:
+                continue
+            if normalizar_hora(item.get("hora_agendamento")) == alvo:
+                return item
+    except Exception:
+        return None
+    return None
 
 
 def carregar_vistorias(ano=None, mes=None):
@@ -1003,13 +1168,19 @@ def render_card_agendamento(
     )
     serv_badge = f'&nbsp;<span class="cv-badge-amber">🔧 {esc(tipo_serv_ag)}</span>' if tipo_serv_ag else ""
 
-    dist_badges = ""
+    # Bloco lateral com KM + tempo (~min) + estrelinha no mais próximo
+    dist_lateral_html = ""
     if dist_info:
-        min_txt = f" (~{dist_info['minutos']} min)" if dist_info.get("minutos") else ""
-        aprox = "aprox. " if dist_info.get("estimada") else ""
-        dist_badges = f'<span class="cv-badge-purple">📍 {aprox}{fmt_km(dist_info["km"])} do ponto base{min_txt}</span>'
-        if eh_mais_proximo:
-            dist_badges = '<span class="cv-badge-green">⭐ Mais próximo</span>&nbsp;' + dist_badges
+        aprox = "~" if dist_info.get("estimada") else ""
+        pill_cls = "cv-dist-pill-closest" if eh_mais_proximo else "cv-dist-pill"
+        star_txt = "⭐ Mais próximo • " if eh_mais_proximo else ""
+        dist_lateral_html = (
+            f'<span class="{pill_cls}">'
+            f'{star_txt}📍 {aprox}{fmt_km(dist_info["km"])} • ⏱️ ~{fmt_tempo(dist_info["minutos"])}'
+            f'</span>'
+        )
+    elif ponto_base and endereco_cli:
+        dist_lateral_html = '<span class="cv-badge-amber">⚠️ Endereço não localizado no mapa</span>'
 
     topo_tempo = (
         f"📅 {fmt_data_br(ag.get('data_agendamento'))} • ⏰ {esc(ag.get('hora_agendamento', ''))}"
@@ -1027,12 +1198,16 @@ def render_card_agendamento(
     title_cls = "cv-card-green-title" if concluida else "cv-card-title"
     sub_cls = "cv-card-green-sub" if concluida else "cv-card-sub"
     end_html = f'<div class="{sub_cls}">📍 {esc(endereco_cli)}</div>' if endereco_cli else ""
-    dist_row_html = f'<div style="margin-top:6px;">{dist_badges}</div>' if dist_badges else ""
-    botoes_dir = ""
+
+    acoes_links = ""
     if wa_html or maps_html:
-        botoes_dir = (
+        acoes_links = f'<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">{wa_html}{maps_html}</div>'
+
+    coluna_direita = ""
+    if dist_lateral_html or acoes_links:
+        coluna_direita = (
             '<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;">'
-            f'{wa_html}{maps_html}'
+            f'{dist_lateral_html}{acoes_links}'
             '</div>'
         )
 
@@ -1043,14 +1218,13 @@ def render_card_agendamento(
                 <span style="font-size:0.88rem;font-weight:700;">{topo_tempo} &nbsp;{status_badge}{serv_badge}</span>
                 <span class="{badge_cls}">{esc(emp_nome)}</span>
             </div>
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
                 <div style="flex:1;min-width:210px;">
                     <div class="{title_cls}">{esc(ag.get('veiculo', ''))} • Placa: {esc(ag.get('placa', ''))}</div>
                     <div class="{sub_cls}">👤 {esc(ag.get('cliente_nome', ''))} • 📞 {esc(ag.get('cliente_whatsapp') or 'Não informado')}</div>
                     {end_html}
-                    {dist_row_html}
                 </div>
-                {botoes_dir}
+                {coluna_direita}
             </div>
         </div>
         """
@@ -1175,22 +1349,31 @@ def render_card_agendamento(
                 )
 
             if st.button("💾 Salvar Alterações", key=f"{prefixo}_ea_save_{ag['id']}_{ver}", type="primary", use_container_width=True):
-                supabase.table("agendamentos").update(
-                    {
-                        "empresa_nome": ea_emp.strip(),
-                        "tipo_servico": ea_serv,
-                        "cliente_nome": ea_cli.strip(),
-                        "cliente_whatsapp": ea_wa.strip(),
-                        "endereco": ea_end.strip(),
-                        "veiculo": ea_veic.strip(),
-                        "placa": ea_placa.strip().upper(),
-                        "data_agendamento": ea_data.isoformat(),
-                        "hora_agendamento": ea_hora.strftime("%H:%M"),
-                    }
-                ).eq("id", ag["id"]).execute()
-                st.session_state.form_ag_ver += 1
-                st.session_state.aviso_sucesso = "Agendamento atualizado!"
-                st.rerun()
+                hora_fmt = ea_hora.strftime("%H:%M")
+                conflito = verificar_conflito_horario(ea_data.isoformat(), hora_fmt, ignorar_id=ag["id"])
+                if conflito:
+                    st.error(
+                        f"⛔ Horário indisponível! Já existe um agendamento em {ea_data.strftime('%d/%m/%Y')} "
+                        f"às {hora_fmt} ({conflito.get('empresa_nome', '')} — {conflito.get('veiculo', '')}). "
+                        "Escolha outro horário."
+                    )
+                else:
+                    supabase.table("agendamentos").update(
+                        {
+                            "empresa_nome": ea_emp.strip(),
+                            "tipo_servico": ea_serv,
+                            "cliente_nome": ea_cli.strip(),
+                            "cliente_whatsapp": ea_wa.strip(),
+                            "endereco": ea_end.strip(),
+                            "veiculo": ea_veic.strip(),
+                            "placa": ea_placa.strip().upper(),
+                            "data_agendamento": ea_data.isoformat(),
+                            "hora_agendamento": hora_fmt,
+                        }
+                    ).eq("id", ag["id"]).execute()
+                    st.session_state.form_ag_ver += 1
+                    st.session_state.aviso_sucesso = "Agendamento atualizado!"
+                    st.rerun()
 
 
 def render_editor_os(vistoria: dict, mapa_empresas: dict, nomes_empresas: list, prefixo_key: str):
@@ -1514,7 +1697,7 @@ def tela_perfil():
 
     perfil = carregar_perfil()
     if perfil.get("_erro_tabela"):
-        st.warning("Rode o SQL do Passo 1 no Supabase para criar a tabela `vistorias_perfil`.")
+        st.warning("Tabela `vistorias_perfil` ainda não encontrada no Supabase.")
         return
 
     with st.form("form_perfil_usuario"):
@@ -1522,7 +1705,7 @@ def tela_perfil():
         p_nome = st.text_input("Seu Nome", value=perfil.get("nome") or "")
         p_tel = st.text_input("Seu Telefone / WhatsApp", value=perfil.get("telefone") or "")
         p_base = st.text_input(
-            "Ponto Base (Endereço completo com rua, bairro e cidade)",
+            "Ponto Base (Rua, Bairro, Cidade - UF ou CEP)",
             value=perfil.get("ponto_base") or "",
         )
         salvar_p = st.form_submit_button("💾 Salvar Perfil", type="primary", use_container_width=True)
@@ -1539,6 +1722,8 @@ def tela_perfil():
                     supabase.table("vistorias_perfil").update(payload).eq("id", perfil["id"]).execute()
                 else:
                     supabase.table("vistorias_perfil").insert(payload).execute()
+                st.session_state.geo_cache = {}
+                st.session_state.rota_cache = {}
                 st.session_state.aviso_sucesso = "Perfil e Ponto Base salvos com sucesso!"
                 st.rerun()
             except Exception as e:
@@ -1554,22 +1739,22 @@ def tela_perfil():
                     <div class="cv-card-green-title">✅ Ponto Base localizado no mapa</div>
                     <div class="cv-card-green-sub">
                         📍 {esc(base_atual)}<br>
-                        A Agenda já está calculando a distância em km a partir deste endereço.
+                        Todos os agendamentos com endereço exibirão km e tempo estimado a partir daqui.
                     </div>
                 </div>
                 """
             )
         else:
             st.warning(
-                "Não consegui localizar esse endereço exato no mapa para o cálculo de km. "
-                "Tente incluir Rua, Bairro, Cidade e Estado (ex.: Rua ..., Bairro ..., Natal - RN)."
+                "Não consegui localizar esse endereço exato no mapa. "
+                "Tente colocar Rua, Bairro, Cidade - RN (ou o CEP)."
             )
     else:
-        st.info("Cadastre seu Ponto Base acima para o sistema indicar qual atendimento do dia está mais perto de você.")
+        st.info("Cadastre seu Ponto Base acima para ver a distância em km e minutos de cada atendimento.")
 
 
 # =========================================================
-# TELA 2: AGENDA DE VISTORIAS (COM DISTÂNCIA DO PONTO BASE)
+# TELA 2: AGENDA DE VISTORIAS (BLOQUEIO DE HORÁRIO + KM EM TODOS)
 # =========================================================
 def tela_agenda():
     st.markdown("### 📅 Agenda de Vistorias")
@@ -1581,6 +1766,8 @@ def tela_agenda():
     empresas = carregar_empresas()
     nomes_empresas = [e["nome"] for e in empresas]
     mapa_empresas = {e["nome"]: e for e in empresas}
+    todos_agendamentos = carregar_agendamentos(apenas_agendadas=False)
+
     hoje = hoje_br()
     amanha = hoje + timedelta(days=1)
     ver = st.session_state.form_ag_ver
@@ -1612,7 +1799,7 @@ def tela_agenda():
             cliente_wa = st.text_input("WhatsApp do Cliente", key=f"ag_wa_{ver}")
 
         endereco_cli = st.text_input(
-            "Endereço do Cliente (rua, bairro e cidade para cálculo de km)",
+            "Endereço do Cliente (rua, bairro e cidade ou CEP para cálculo de km)",
             key=f"ag_end_{ver}",
         )
 
@@ -1628,42 +1815,66 @@ def tela_agenda():
         with d2:
             hora_ag = st.time_input("Horário", value=time(8, 0), key=f"ag_hora_{ver}")
 
+        # Mostra na hora os horários já ocupados nessa data
+        ocupados_data = sorted(
+            normalizar_hora(a.get("hora_agendamento"))
+            for a in todos_agendamentos
+            if str(a.get("data_agendamento", ""))[:10] == data_ag.isoformat()
+        )
+        hora_escolhida_fmt = hora_ag.strftime("%H:%M")
+        if ocupados_data:
+            if hora_escolhida_fmt in ocupados_data:
+                st.error(
+                    f"⛔ O horário **{hora_escolhida_fmt}** em **{data_ag.strftime('%d/%m/%Y')}** já está preenchido! "
+                    f"Horários ocupados nesta data: {', '.join(ocupados_data)}."
+                )
+            else:
+                st.caption(f"🕒 Horários já preenchidos em {data_ag.strftime('%d/%m/%Y')}: {', '.join(ocupados_data)}")
+
         if st.button("📅 Salvar na Agenda", key=f"btn_salvar_ag_{ver}", type="primary", use_container_width=True):
             if not empresa_sel or not cliente_nome.strip() or not veiculo.strip() or not placa.strip():
                 st.warning("Preencha Empresa, Cliente, Veículo e Placa.")
             else:
-                try:
-                    supabase.table("agendamentos").insert(
-                        {
-                            "empresa_id": None,
-                            "empresa_nome": empresa_sel.strip(),
-                            "tipo_servico": tipo_serv_sel,
-                            "cliente_nome": cliente_nome.strip(),
-                            "cliente_whatsapp": cliente_wa.strip(),
-                            "endereco": endereco_cli.strip(),
-                            "veiculo": veiculo.strip(),
-                            "placa": placa.strip().upper(),
-                            "data_agendamento": data_ag.isoformat(),
-                            "hora_agendamento": hora_ag.strftime("%H:%M"),
-                            "status": "Agendada",
-                        }
-                    ).execute()
-                    st.session_state.form_ag_ver += 1
-                    if data_ag == hoje:
-                        st.session_state.agenda_filtro = "Hoje"
-                        st.session_state.agenda_data_busca = None
-                    elif data_ag == amanha:
-                        st.session_state.agenda_filtro = "Amanhã"
-                        st.session_state.agenda_data_busca = None
-                    else:
-                        st.session_state.agenda_filtro = "Data"
-                        st.session_state.agenda_data_busca = data_ag
-                    st.session_state.aviso_sucesso = (
-                        f"Agendamento salvo para {data_ag.strftime('%d/%m/%Y')} às {hora_ag.strftime('%H:%M')}!"
+                conflito = verificar_conflito_horario(data_ag.isoformat(), hora_escolhida_fmt)
+                if conflito:
+                    st.error(
+                        f"⛔ Não é possível agendar! Já existe um atendimento em **{data_ag.strftime('%d/%m/%Y')}** "
+                        f"às **{hora_escolhida_fmt}** ({conflito.get('empresa_nome', '')} — "
+                        f"{conflito.get('veiculo', '')}). Escolha outro horário."
                     )
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Erro ao salvar agendamento: {e}")
+                else:
+                    try:
+                        supabase.table("agendamentos").insert(
+                            {
+                                "empresa_id": None,
+                                "empresa_nome": empresa_sel.strip(),
+                                "tipo_servico": tipo_serv_sel,
+                                "cliente_nome": cliente_nome.strip(),
+                                "cliente_whatsapp": cliente_wa.strip(),
+                                "endereco": endereco_cli.strip(),
+                                "veiculo": veiculo.strip(),
+                                "placa": placa.strip().upper(),
+                                "data_agendamento": data_ag.isoformat(),
+                                "hora_agendamento": hora_escolhida_fmt,
+                                "status": "Agendada",
+                            }
+                        ).execute()
+                        st.session_state.form_ag_ver += 1
+                        if data_ag == hoje:
+                            st.session_state.agenda_filtro = "Hoje"
+                            st.session_state.agenda_data_busca = None
+                        elif data_ag == amanha:
+                            st.session_state.agenda_filtro = "Amanhã"
+                            st.session_state.agenda_data_busca = None
+                        else:
+                            st.session_state.agenda_filtro = "Data"
+                            st.session_state.agenda_data_busca = data_ag
+                        st.session_state.aviso_sucesso = (
+                            f"Agendamento salvo para {data_ag.strftime('%d/%m/%Y')} às {hora_escolhida_fmt}!"
+                        )
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao salvar agendamento: {e}")
 
     inicio_semana = hoje - timedelta(days=hoje.weekday())
     fim_semana = inicio_semana + timedelta(days=6)
@@ -1699,8 +1910,7 @@ def tela_agenda():
                 st.session_state.agenda_data_busca = data_pesquisa
                 st.rerun()
 
-    todos_agendamentos = carregar_agendamentos(apenas_agendadas=False)
-
+    # VISÃO SEMANAL
     if st.session_state.agenda_filtro == "Esta Semana":
         semana_ags = [
             ag
@@ -1734,23 +1944,35 @@ def tela_agenda():
                     st.session_state.agenda_data_busca = dt_obj
                     st.rerun()
 
+            dist_dia_sem = {}
+            if ponto_base:
+                for ag in lista_dia:
+                    if (ag.get("endereco") or "").strip():
+                        d_i = calcular_distancia_rota(ponto_base, ag["endereco"])
+                        if d_i:
+                            dist_dia_sem[ag["id"]] = d_i
+            pends_sem = [
+                (a, dist_dia_sem[a["id"]])
+                for a in lista_dia
+                if a["id"] in dist_dia_sem and a.get("status") != "Concluida"
+            ]
+            pends_sem.sort(key=lambda x: x[1]["km"])
+            id_prox_sem = pends_sem[0][0]["id"] if pends_sem else None
+
             for ag in lista_dia:
-                d_info = (
-                    calcular_distancia_rota(ponto_base, ag.get("endereco"))
-                    if (ponto_base and ag.get("endereco"))
-                    else None
-                )
                 render_card_agendamento(
                     ag,
                     mapa_empresas,
                     nomes_empresas,
                     prefixo=f"sem_{dt_iso}",
                     ponto_base=ponto_base,
-                    dist_info=d_info,
+                    dist_info=dist_dia_sem.get(ag["id"]),
+                    eh_mais_proximo=(ag["id"] == id_prox_sem),
                     mostrar_data=False,
                 )
         return
 
+    # VISÃO DIÁRIA COMPLETA (Hoje, Amanhã ou Data escolhida)
     if st.session_state.agenda_filtro == "Hoje":
         data_ref = hoje
     elif st.session_state.agenda_filtro == "Amanhã":
@@ -1762,6 +1984,7 @@ def tela_agenda():
         ag for ag in todos_agendamentos if str(ag.get("data_agendamento", ""))[:10] == data_ref.isoformat()
     ]
 
+    # Calcula distância e tempo para TODOS os atendimentos do dia com endereço
     distancias_dia = {}
     if ponto_base and ags_do_dia:
         for ag in ags_do_dia:
@@ -1771,15 +1994,14 @@ def tela_agenda():
                 if info:
                     distancias_dia[ag["id"]] = info
 
-    pendentes_com_dist = [
-        (ag, distancias_dia[ag["id"]])
-        for ag in ags_do_dia
-        if ag["id"] in distancias_dia and ag.get("status") != "Concluida"
-    ]
-    pendentes_com_dist.sort(key=lambda par: par[1]["km"])
+    # Ranking de proximidade de todos os atendimentos do dia
+    todos_com_dist = [(ag, distancias_dia[ag["id"]]) for ag in ags_do_dia if ag["id"] in distancias_dia]
+    todos_com_dist.sort(key=lambda par: par[1]["km"])
+
+    pendentes_com_dist = [(ag, d) for ag, d in todos_com_dist if ag.get("status") != "Concluida"]
     id_mais_proximo = pendentes_com_dist[0][0]["id"] if pendentes_com_dist else None
 
-    horarios_preenchidos = sorted(x.get("hora_agendamento", "") for x in ags_do_dia)
+    horarios_preenchidos = sorted(normalizar_hora(x.get("hora_agendamento")) for x in ags_do_dia)
     resumo_horarios = (
         f"Horários preenchidos: <strong>{esc(', '.join(horarios_preenchidos))}</strong>"
         if horarios_preenchidos
@@ -1799,31 +2021,53 @@ def tela_agenda():
         """
     )
 
-    if pendentes_com_dist:
-        linhas_rota = []
-        for idx, (ag_r, d_r) in enumerate(pendentes_com_dist, start=1):
-            tag = '<span class="cv-badge-green">⭐ Mais próximo</span> ' if idx == 1 else f"<strong>{idx}º</strong> "
-            min_txt = f" (~{d_r['minutos']} min)" if d_r.get("minutos") else ""
-            linhas_rota.append(
-                f'<div class="cv-route-item">'
-                f'{tag}<strong>{fmt_km(d_r["km"])} do ponto base</strong>{min_txt} • '
-                f'⏰ {esc(ag_r.get("hora_agendamento", ""))} • {esc(ag_r.get("veiculo", ""))} ({esc(ag_r.get("cliente_nome", ""))}) '
-                f'<span style="color:var(--muted);">— {esc(ag_r.get("endereco", ""))}</span>'
-                f'</div>'
-            )
-        render_html(
-            f"""
-            <div class="cv-route-box">
-                <div style="font-weight:800;font-size:0.96rem;margin-bottom:6px;color:var(--text);">
-                    🧭 Proximidade do Ponto Base ({esc(ponto_base)})
-                </div>
-                {''.join(linhas_rota)}
-            </div>
-            """
-        )
-    elif ags_do_dia and not ponto_base:
-        st.info("💡 Cadastre seu **Ponto Base** em **👤 Perfil** (no topo) para ver a distância em km de cada cliente.")
+    # Quadro inteligente com TODOS os atendimentos ordenados do mais próximo ao mais distante
+    if ponto_base and ags_do_dia:
+        if todos_com_dist:
+            linhas_rota = []
+            for idx, (ag_r, d_r) in enumerate(todos_com_dist, start=1):
+                eh_top = ag_r["id"] == id_mais_proximo
+                tag = '<span class="cv-badge-green">⭐ Mais próximo</span> ' if eh_top else f"<strong>{idx}º</strong> "
+                pill_cls = "cv-dist-pill-closest" if eh_top else "cv-dist-pill"
+                aprox = "~" if d_r.get("estimada") else ""
+                linhas_rota.append(
+                    f'<div class="cv-route-item">'
+                    f'<div>{tag}⏰ <strong>{esc(ag_r.get("hora_agendamento", ""))}</strong> • '
+                    f'{esc(ag_r.get("veiculo", ""))} ({esc(ag_r.get("cliente_nome", ""))}) '
+                    f'<span style="color:var(--muted);">— {esc(ag_r.get("endereco", ""))}</span></div>'
+                    f'<span class="{pill_cls}">📍 {aprox}{fmt_km(d_r["km"])} • ⏱️ ~{fmt_tempo(d_r["minutos"])}</span>'
+                    f'</div>'
+                )
 
+            sem_calc = [ag for ag in ags_do_dia if ag["id"] not in distancias_dia]
+            for ag_s in sem_calc:
+                motivo = (
+                    "Endereço não informado"
+                    if not (ag_s.get("endereco") or "").strip()
+                    else "Endereço não localizado no mapa (edite com bairro/cidade)"
+                )
+                linhas_rota.append(
+                    f'<div class="cv-route-item">'
+                    f'<div>⏰ <strong>{esc(ag_s.get("hora_agendamento", ""))}</strong> • '
+                    f'{esc(ag_s.get("veiculo", ""))} ({esc(ag_s.get("cliente_nome", ""))})</div>'
+                    f'<span class="cv-badge-amber">⚠️ {motivo}</span>'
+                    f'</div>'
+                )
+
+            render_html(
+                f"""
+                <div class="cv-route-box">
+                    <div style="font-weight:800;font-size:0.96rem;margin-bottom:6px;color:var(--text);">
+                        🧭 Distância e Tempo do Ponto Base ({esc(ponto_base)})
+                    </div>
+                    {''.join(linhas_rota)}
+                </div>
+                """
+            )
+    elif ags_do_dia and not ponto_base:
+        st.info("💡 Cadastre seu **Ponto Base** em **👤 Perfil** (no topo) para ver a distância em km e minutos de cada cliente.")
+
+    # Grade completa de horários do dia (07:00 às 19:00)
     por_hora = {}
     for ag in ags_do_dia:
         h = extrair_hora_int(ag.get("hora_agendamento"))
@@ -2092,19 +2336,25 @@ def tela_ordem_servico():
         if not ags_hoje:
             st.info("Nenhuma Ordem de Serviço pendente na agenda de hoje.")
         else:
+            dists_hoje = {}
+            if ponto_base:
+                for ag in ags_hoje:
+                    if (ag.get("endereco") or "").strip():
+                        d_i = calcular_distancia_rota(ponto_base, ag["endereco"])
+                        if d_i:
+                            dists_hoje[ag["id"]] = d_i
+            ordenados_h = sorted(dists_hoje.items(), key=lambda x: x[1]["km"])
+            id_prox_h = ordenados_h[0][0] if ordenados_h else None
+
             for ag in ags_hoje:
-                d_info = (
-                    calcular_distancia_rota(ponto_base, ag.get("endereco"))
-                    if (ponto_base and ag.get("endereco"))
-                    else None
-                )
                 render_card_agendamento(
                     ag,
                     mapa_empresas,
                     nomes_empresas,
                     prefixo="os_hoje",
                     ponto_base=ponto_base,
-                    dist_info=d_info,
+                    dist_info=dists_hoje.get(ag["id"]),
+                    eh_mais_proximo=(ag["id"] == id_prox_h),
                     mostrar_data=False,
                 )
 
@@ -2124,7 +2374,7 @@ def tela_ordem_servico():
             for ag in proximas:
                 d_info = (
                     calcular_distancia_rota(ponto_base, ag.get("endereco"))
-                    if (ponto_base and ag.get("endereco"))
+                    if (ponto_base and (ag.get("endereco") or "").strip())
                     else None
                 )
                 render_card_agendamento(
