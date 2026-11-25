@@ -53,6 +53,7 @@ SESSAO_TIMEOUT_SEGUNDOS = 3600  # 1 hora de inatividade
 CATEGORIAS_EMPRESA = ["Vistoria", "Rastreamento"]
 TIPOS_VISTORIA_OPCOES = ["Cautelar", "Sinistro", "Seguro", "Outra"]
 TIPOS_RASTREAMENTO_OPCOES = ["Instalação", "Manutenção", "Retirada"]
+HORARIOS_PADRAO = [f"{h:02d}:00" for h in range(7, 20)]
 
 COLUNAS_VISTORIA_LEVE = (
     "id, agendamento_id, empresa_id, empresa_nome, cliente_nome, endereco, "
@@ -214,6 +215,8 @@ if "agenda_filtro" not in st.session_state:
     st.session_state.agenda_filtro = "Hoje"
 if "agenda_data_busca" not in st.session_state:
     st.session_state.agenda_data_busca = None
+if "pending_cal_data" not in st.session_state:
+    st.session_state.pending_cal_data = None
 if "form_emp_ver" not in st.session_state:
     st.session_state.form_emp_ver = 0
 if "form_ag_ver" not in st.session_state:
@@ -425,7 +428,6 @@ def aplicar_tema(modo: str):
             font-weight: 700;
         }}
 
-        /* Oculta marcadores técnicos sem ocupar altura */
         div[data-testid="stElementContainer"]:has(.marker-hidden),
         div.element-container:has(.marker-hidden) {{
             display: none !important;
@@ -466,7 +468,6 @@ def aplicar_tema(modo: str):
             flex: 0 0 auto !important;
         }}
 
-        /* Linha do topo na tela de Login (bolinha à direita) */
         div[data-testid="stHorizontalBlock"]:has(.cv-login-top-marker) {{
             display: flex !important;
             flex-direction: row !important;
@@ -583,13 +584,11 @@ def aplicar_tema(modo: str):
             margin: 0 !important;
         }}
 
-        /* Ícone maior na linha superior de cada aba */
         div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) button p::first-line {{
             font-size: 1.22rem !important;
             line-height: 1.32 !important;
         }}
 
-        /* Ajustes para tela de celular */
         @media (max-width: 640px) {{
             .block-container {{
                 padding-top: 3.1rem !important;
@@ -704,6 +703,21 @@ def aplicar_tema(modo: str):
             padding: 12px 16px;
             margin: 10px 0 12px 0;
             color: var(--purple-soft-text);
+        }}
+        .cv-slots-pills {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-top: 6px;
+        }}
+        .cv-slot-pill-free {{
+            background: var(--green-badge-bg);
+            color: var(--green-badge-text);
+            font-weight: 700;
+            font-size: 0.76rem;
+            padding: 2px 8px;
+            border-radius: 8px;
+            display: inline-block;
         }}
         .cv-route-box {{
             background: var(--surface);
@@ -1147,6 +1161,21 @@ def extrair_hora_int(hora_str: str) -> int:
         return int(str(hora_str or "08:00").split(":")[0])
     except (ValueError, IndexError, TypeError):
         return 8
+
+
+def obter_horarios_status(todos_agendamentos: list, data_iso: str, ignorar_id=None):
+    """Retorna (ocupados, disponiveis) para uma data específica, ignorando atendimentos Frustrados."""
+    ocupados = sorted(
+        {
+            normalizar_hora(a.get("hora_agendamento"))
+            for a in todos_agendamentos
+            if str(a.get("data_agendamento", ""))[:10] == data_iso
+            and a.get("status") != "Frustrada"
+            and (ignorar_id is None or a.get("id") != ignorar_id)
+        }
+    )
+    disponiveis = [h for h in HORARIOS_PADRAO if h not in ocupados]
+    return ocupados, disponiveis
 
 
 def agendamento_esta_atrasado(ag: dict) -> bool:
@@ -1768,6 +1797,7 @@ def render_card_agendamento(
 
         with st.expander(rotulo_exp_ag):
             tab_cor, tab_reag, tab_frust = st.tabs(["✏️ Corrigir", "🔄 Reagendar", "❌ Frustrada"])
+            todos_ags_cache = carregar_agendamentos(apenas_agendadas=False)
 
             with tab_cor:
                 opcoes_ag_emp = sorted({e for e in (nomes_empresas + [emp_nome]) if e})
@@ -1893,12 +1923,26 @@ def render_card_agendamento(
                         format="DD/MM/YYYY",
                         key=f"{prefixo}_reag_data_{ag['id']}_{ver}",
                     )
+                _, disp_reag = obter_horarios_status(
+                    todos_ags_cache, nova_data_r.isoformat(), ignorar_id=ag["id"]
+                )
+                opcoes_hora_r = disp_reag + ["Outro horário..."]
                 with rc2:
-                    nova_hora_r = st.time_input(
-                        "Novo Horário",
-                        value=parse_hora(ag.get("hora_agendamento")),
-                        key=f"{prefixo}_reag_hora_{ag['id']}_{ver}",
+                    hora_r_sel = st.selectbox(
+                        "Novo Horário Disponível",
+                        opcoes_hora_r,
+                        key=f"{prefixo}_reag_hsel_{ag['id']}_{ver}_{nova_data_r.isoformat()}",
                     )
+
+                if hora_r_sel == "Outro horário...":
+                    nova_hora_custom = st.time_input(
+                        "Informe o novo horário",
+                        value=parse_hora(ag.get("hora_agendamento")),
+                        key=f"{prefixo}_reag_hcustom_{ag['id']}_{ver}_{nova_data_r.isoformat()}",
+                    )
+                    nova_hora_fmt = nova_hora_custom.strftime("%H:%M")
+                else:
+                    nova_hora_fmt = hora_r_sel
 
                 motivo_reag = st.text_area(
                     "Motivo do Reagendamento (Observação)",
@@ -1914,7 +1958,6 @@ def render_card_agendamento(
                     type="primary",
                     use_container_width=True,
                 ):
-                    nova_hora_fmt = nova_hora_r.strftime("%H:%M")
                     conflito_r = verificar_conflito_horario(
                         nova_data_r.isoformat(), nova_hora_fmt, ignorar_id=ag["id"]
                     )
@@ -2393,11 +2436,26 @@ def tela_perfil():
 
 
 # =========================================================
-# TELA 2: AGENDA DE VISTORIAS
+# TELA 2: AGENDA DE VISTORIAS (CALENDÁRIO AUTO + LIVRES)
 # =========================================================
+def _ao_mudar_calendario_agenda():
+    st.session_state.agenda_filtro = "Data"
+    st.session_state.agenda_data_busca = st.session_state.cal_pesquisa_agenda
+
+
 def tela_agenda():
     st.markdown("### 📅 Agenda de Vistorias")
     mostrar_aviso_pendente()
+
+    hoje = hoje_br()
+    amanha = hoje + timedelta(days=1)
+
+    # Sincroniza a data do calendário antes do widget ser criado
+    if st.session_state.get("pending_cal_data") is not None:
+        st.session_state.cal_pesquisa_agenda = st.session_state.pending_cal_data
+        st.session_state.pending_cal_data = None
+    if "cal_pesquisa_agenda" not in st.session_state:
+        st.session_state.cal_pesquisa_agenda = st.session_state.agenda_data_busca or hoje
 
     perfil = carregar_perfil()
     ponto_base = (perfil.get("ponto_base") or "").strip()
@@ -2413,8 +2471,6 @@ def tela_agenda():
         if ag.get("status") == "Frustrada" or agendamento_esta_atrasado(ag)
     ]
 
-    hoje = hoje_br()
-    amanha = hoje + timedelta(days=1)
     ver = st.session_state.form_ag_ver
 
     with st.expander("➕ Novo Agendamento", expanded=False):
@@ -2457,24 +2513,42 @@ def tela_agenda():
         d1, d2 = st.columns(2)
         with d1:
             data_ag = st.date_input("Data", value=hoje, format="DD/MM/YYYY", key=f"ag_data_{ver}")
-        with d2:
-            hora_ag = st.time_input("Horário", value=time(8, 0), key=f"ag_hora_{ver}")
 
-        ocupados_data = sorted(
-            normalizar_hora(a.get("hora_agendamento"))
-            for a in todos_agendamentos
-            if str(a.get("data_agendamento", ""))[:10] == data_ag.isoformat()
-            and a.get("status") != "Frustrada"
-        )
-        hora_escolhida_fmt = hora_ag.strftime("%H:%M")
-        if ocupados_data:
-            if hora_escolhida_fmt in ocupados_data:
-                st.error(
-                    f"⛔ O horário **{hora_escolhida_fmt}** em **{data_ag.strftime('%d/%m/%Y')}** já está preenchido! "
-                    f"Horários ocupados nesta data: {', '.join(ocupados_data)}."
-                )
-            else:
-                st.caption(f"🕒 Horários já preenchidos em {data_ag.strftime('%d/%m/%Y')}: {', '.join(ocupados_data)}")
+        ocupados_data, disponiveis_data = obter_horarios_status(todos_agendamentos, data_ag.isoformat())
+        opcoes_hora_ag = disponiveis_data + ["Outro horário..."]
+
+        with d2:
+            hora_sel_op = st.selectbox(
+                "Horário Disponível",
+                opcoes_hora_ag,
+                key=f"ag_hora_sel_{ver}_{data_ag.isoformat()}",
+            )
+
+        if hora_sel_op == "Outro horário...":
+            hora_custom = st.time_input(
+                "Informe o horário",
+                value=time(8, 30),
+                key=f"ag_hora_custom_{ver}_{data_ag.isoformat()}",
+            )
+            hora_escolhida_fmt = hora_custom.strftime("%H:%M")
+        else:
+            hora_escolhida_fmt = hora_sel_op
+
+        if disponiveis_data:
+            st.caption(
+                f"🟢 {len(disponiveis_data)} horário(s) livre(s) em {data_ag.strftime('%d/%m/%Y')}: "
+                f"{', '.join(disponiveis_data)}"
+            )
+        else:
+            st.warning(
+                f"Todos os horários padrão (07:00 às 19:00) estão preenchidos em {data_ag.strftime('%d/%m/%Y')}. "
+                "Use 'Outro horário...' caso precise encaixar."
+            )
+
+        if hora_escolhida_fmt in ocupados_data:
+            st.error(
+                f"⛔ O horário **{hora_escolhida_fmt}** em **{data_ag.strftime('%d/%m/%Y')}** já está preenchido!"
+            )
 
         if st.button("📅 Salvar na Agenda", key=f"btn_salvar_ag_{ver}", type="primary", use_container_width=True):
             if not empresa_sel or not cliente_nome.strip() or not veiculo.strip() or not placa.strip():
@@ -2506,6 +2580,7 @@ def tela_agenda():
                         ).execute()
                         limpar_cache_dados()
                         st.session_state.form_ag_ver += 1
+                        st.session_state.pending_cal_data = data_ag
                         if data_ag == hoje:
                             st.session_state.agenda_filtro = "Hoje"
                             st.session_state.agenda_data_busca = None
@@ -2545,24 +2620,20 @@ def tela_agenda():
             ):
                 st.session_state.agenda_filtro = chave_f
                 st.session_state.agenda_data_busca = None
+                if chave_f == "Hoje":
+                    st.session_state.pending_cal_data = hoje
+                elif chave_f == "Amanhã":
+                    st.session_state.pending_cal_data = amanha
                 st.rerun()
 
+    # Pesquisa automática no calendário (ao escolher a data já abre automaticamente)
     with st.container(border=True):
-        pc1, pc2 = st.columns([2.4, 1.2])
-        with pc1:
-            valor_cal = st.session_state.agenda_data_busca or hoje
-            data_pesquisa = st.date_input(
-                "Pesquisar uma data no calendário",
-                value=valor_cal,
-                format="DD/MM/YYYY",
-                key="cal_pesquisa_agenda",
-            )
-        with pc2:
-            render_html("<div style='height:27px;'></div>")
-            if st.button("🔍 Ver Data", key="btn_ver_data_cal", type="primary", use_container_width=True):
-                st.session_state.agenda_filtro = "Data"
-                st.session_state.agenda_data_busca = data_pesquisa
-                st.rerun()
+        st.date_input(
+            "📅 Pesquisar uma data no calendário",
+            format="DD/MM/YYYY",
+            key="cal_pesquisa_agenda",
+            on_change=_ao_mudar_calendario_agenda,
+        )
 
     # VISÃO ATRASADAS / FRUSTRADAS
     if st.session_state.agenda_filtro == "Atrasadas":
@@ -2620,6 +2691,7 @@ def tela_agenda():
                 if st.button("Ver dia completo", key=f"ir_dia_{dt_iso}", use_container_width=True):
                     st.session_state.agenda_filtro = "Data"
                     st.session_state.agenda_data_busca = dt_obj
+                    st.session_state.pending_cal_data = dt_obj
                     st.rerun()
 
             pends_sem = [
@@ -2663,16 +2735,26 @@ def tela_agenda():
     pendentes_com_dist = [(ag, d) for ag, d in todos_com_dist if ag.get("status") == "Agendada"]
     id_mais_proximo = pendentes_com_dist[0][0]["id"] if pendentes_com_dist else None
 
-    horarios_preenchidos = sorted(
-        normalizar_hora(x.get("hora_agendamento"))
-        for x in ags_do_dia
-        if x.get("status") != "Frustrada"
+    horarios_preenchidos, horarios_disponiveis = obter_horarios_status(
+        todos_agendamentos, data_ref.isoformat()
     )
-    resumo_horarios = (
-        f"Horários preenchidos: <strong>{esc(', '.join(horarios_preenchidos))}</strong>"
+    resumo_preenchidos = (
+        f"<strong>{esc(', '.join(horarios_preenchidos))}</strong>"
         if horarios_preenchidos
-        else "Nenhum horário preenchido ainda — todos os horários estão livres."
+        else "Nenhum"
     )
+    if horarios_disponiveis:
+        pills_livres = "".join(
+            f'<span class="cv-slot-pill-free">{h}</span>' for h in horarios_disponiveis
+        )
+        bloco_livres_html = (
+            f'<div style="font-size:0.84rem;margin-top:6px;">🟢 Horários disponíveis ({len(horarios_disponiveis)}):</div>'
+            f'<div class="cv-slots-pills">{pills_livres}</div>'
+        )
+    else:
+        bloco_livres_html = (
+            '<div style="font-size:0.84rem;margin-top:6px;">🔴 Todos os horários padrão (07:00 às 19:00) preenchidos.</div>'
+        )
 
     render_html(
         f"""
@@ -2680,9 +2762,10 @@ def tela_agenda():
             <div style="font-size:1.05rem;font-weight:800;">
                 📅 {DIAS_SEMANA_COMPLETO[data_ref.weekday()]}, {data_ref.strftime('%d/%m/%Y')}
             </div>
-            <div style="font-size:0.88rem;margin-top:4px;">
-                {len(ags_do_dia)} agendamento(s) no dia • {resumo_horarios}
+            <div style="font-size:0.86rem;margin-top:4px;">
+                {len(ags_do_dia)} agendamento(s) no dia • Preenchidos: {resumo_preenchidos}
             </div>
+            {bloco_livres_html}
         </div>
         """
     )
@@ -3704,7 +3787,7 @@ def main():
     elif st.session_state.pagina == "Perfil":
         tela_perfil()
 
-    # Barra fixa inferior estilo aplicativo (Agenda, Ordem de Serviço, Empresas, Financeiro, PDF, Perfil)
+    # Barra fixa inferior estilo aplicativo
     render_barra_inferior()
 
 
