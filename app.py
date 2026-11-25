@@ -1,4 +1,7 @@
 import base64
+import concurrent.futures
+import hashlib
+import hmac
 import html
 import io
 import json
@@ -45,10 +48,17 @@ def hoje_br() -> date:
 
 LOGIN_USUARIO = "AD Vistoria"
 LOGIN_SENHA = "55496449100084"
+SESSAO_TIMEOUT_SEGUNDOS = 3600  # 1 hora de inatividade
 
 CATEGORIAS_EMPRESA = ["Vistoria", "Rastreamento"]
 TIPOS_VISTORIA_OPCOES = ["Cautelar", "Sinistro", "Seguro", "Outra"]
 TIPOS_RASTREAMENTO_OPCOES = ["Instalação", "Manutenção", "Retirada"]
+
+COLUNAS_VISTORIA_LEVE = (
+    "id, agendamento_id, empresa_id, empresa_nome, cliente_nome, endereco, "
+    "veiculo, placa, data_vistoria, valor, tipo_vistoria, status_pagamento, "
+    "data_recebimento, created_at"
+)
 
 MESES_PT = {
     1: "Janeiro",
@@ -87,10 +97,106 @@ def esc(texto) -> str:
 
 
 # =========================================================
+# CONTROLE DE SESSÃO PERSISTENTE (1 HORA DE INATIVIDADE)
+# =========================================================
+def _chave_assinatura() -> bytes:
+    segredo_extra = str(st.secrets.get("SUPABASE_KEY", "ad-vistoria-key"))
+    return f"{LOGIN_SENHA}:{segredo_extra}".encode("utf-8")
+
+
+def _criar_token_sessao() -> str:
+    exp = int(time_mod.time()) + SESSAO_TIMEOUT_SEGUNDOS
+    msg = f"{LOGIN_USUARIO}|{exp}".encode("utf-8")
+    sig = hmac.new(_chave_assinatura(), msg, hashlib.sha256).hexdigest()[:24]
+    return f"{exp}.{sig}"
+
+
+def _validar_token_sessao(token: str):
+    if not token or "." not in str(token):
+        return False, 0
+    try:
+        exp_str, sig = str(token).split(".", 1)
+        exp = int(exp_str)
+        if exp <= int(time_mod.time()):
+            return False, exp
+        msg = f"{LOGIN_USUARIO}|{exp}".encode("utf-8")
+        esperada = hmac.new(_chave_assinatura(), msg, hashlib.sha256).hexdigest()[:24]
+        return hmac.compare_digest(sig, esperada), exp
+    except Exception:
+        return False, 0
+
+
+def _ler_token_url():
+    try:
+        val = st.query_params.get("sessao")
+        if isinstance(val, list):
+            return val[0] if val else None
+        return val
+    except Exception:
+        return None
+
+
+def _definir_token_url(token: str):
+    try:
+        st.query_params["sessao"] = token
+    except Exception:
+        pass
+
+
+def _limpar_token_url():
+    try:
+        if "sessao" in st.query_params:
+            del st.query_params["sessao"]
+    except Exception:
+        pass
+
+
+def sincronizar_sessao():
+    """Mantém o login ativo por até 1 hora de inatividade mesmo ao sair e voltar no celular."""
+    agora = int(time_mod.time())
+    token_url = _ler_token_url()
+
+    if st.session_state.autenticado:
+        ultimo = st.session_state.get("ultimo_acesso", agora)
+        if agora - ultimo > SESSAO_TIMEOUT_SEGUNDOS:
+            st.session_state.autenticado = False
+            st.session_state.os_importada = None
+            st.session_state.aviso_expirado = True
+            _limpar_token_url()
+            return
+
+        st.session_state.ultimo_acesso = agora
+        if st.session_state.get("manter_conectado", True):
+            valido, exp_atual = _validar_token_sessao(token_url)
+            # Renova o token a cada ~5 minutos de uso para manter sempre 1 hora à frente
+            if (not valido) or (exp_atual - agora < SESSAO_TIMEOUT_SEGUNDOS - 300):
+                _definir_token_url(_criar_token_sessao())
+    else:
+        if token_url:
+            valido, exp_atual = _validar_token_sessao(token_url)
+            if valido:
+                st.session_state.autenticado = True
+                st.session_state.manter_conectado = True
+                st.session_state.ultimo_acesso = agora
+                st.session_state.aviso_expirado = False
+                if exp_atual - agora < SESSAO_TIMEOUT_SEGUNDOS - 300:
+                    _definir_token_url(_criar_token_sessao())
+            else:
+                _limpar_token_url()
+                st.session_state.aviso_expirado = True
+
+
+# =========================================================
 # ESTADO INICIAL DA SESSÃO
 # =========================================================
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
+if "manter_conectado" not in st.session_state:
+    st.session_state.manter_conectado = True
+if "ultimo_acesso" not in st.session_state:
+    st.session_state.ultimo_acesso = int(time_mod.time())
+if "aviso_expirado" not in st.session_state:
+    st.session_state.aviso_expirado = False
 if "tema" not in st.session_state:
     st.session_state.tema = "claro"
 if "pagina" not in st.session_state:
@@ -119,10 +225,10 @@ if "fin_edit_ver" not in st.session_state:
     st.session_state.fin_edit_ver = 0
 if "aviso_sucesso" not in st.session_state:
     st.session_state.aviso_sucesso = None
-if "geo_cache" not in st.session_state:
-    st.session_state.geo_cache = {}
-if "rota_cache" not in st.session_state:
-    st.session_state.rota_cache = {}
+if "fotos_abertas" not in st.session_state:
+    st.session_state.fotos_abertas = set()
+if "pdfs_prontos" not in st.session_state:
+    st.session_state.pdfs_prontos = {}
 
 
 # =========================================================
@@ -753,7 +859,14 @@ def get_supabase() -> Client:
     return create_client(url, key)
 
 
+@st.cache_resource
+def get_geo_store() -> dict:
+    """Cache compartilhado e thread-safe em memória do servidor para mapas e rotas."""
+    return {"geo": {}, "rota": {}}
+
+
 supabase = get_supabase()
+GEO_STORE = get_geo_store()
 
 
 def fmt_moeda(valor: float) -> str:
@@ -824,7 +937,6 @@ def extrair_hora_int(hora_str: str) -> int:
 
 
 def agendamento_esta_atrasado(ag: dict) -> bool:
-    """Retorna True se o agendamento ainda está pendente e já passou da data/horário marcado."""
     if ag.get("status") != "Agendada":
         return False
     dt_d = parse_data(ag.get("data_agendamento"))
@@ -868,13 +980,11 @@ def link_whatsapp(telefone: str, mensagem: str = "") -> str:
 
 
 def link_rota_maps(origem: str, destino: str) -> str:
+    """Abre a rota no Google Maps sempre saindo da localização atual (GPS) do celular."""
     dest = str(destino or "").strip()
-    orig = str(origem or "").strip()
     if not dest:
         return ""
-    if orig:
-        return f"https://www.google.com/maps/dir/?api=1&origin={quote(orig)}&destination={quote(dest)}"
-    return f"https://www.google.com/maps/search/?api=1&query={quote(dest)}"
+    return f"https://www.google.com/maps/dir/?api=1&destination={quote(dest)}&travelmode=driving"
 
 
 def comprimir_imagem_para_base64(arquivo_upload) -> str:
@@ -883,7 +993,7 @@ def comprimir_imagem_para_base64(arquivo_upload) -> str:
         img = img.convert("RGB")
     img.thumbnail((900, 900))
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=72, optimize=True)
+    img.save(buf, format="JPEG", quality=70, optimize=True)
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
@@ -902,7 +1012,7 @@ def mostrar_aviso_pendente():
 
 
 # =========================================================
-# GEOLOCALIZAÇÃO E DISTÂNCIA (PHOTON + VIACEP + NOMINATIM + OSRM)
+# GEOLOCALIZAÇÃO RÁPIDA, PARALELA E COM CACHE PERSISTENTE
 # =========================================================
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371.0
@@ -939,9 +1049,9 @@ def _resolver_cep_viacep(texto: str) -> str:
     try:
         req = urllib.request.Request(
             f"https://viacep.com.br/ws/{cep}/json/",
-            headers={"User-Agent": "ControleDeVistoriasAD/2.0"},
+            headers={"User-Agent": "ControleDeVistoriasAD/3.0"},
         )
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
             d = json.loads(resp.read().decode("utf-8"))
             if not d.get("erro"):
                 partes = [d.get("logradouro"), d.get("bairro"), d.get("localidade"), d.get("uf")]
@@ -957,12 +1067,9 @@ def _buscar_photon(query: str, bias_coord=None):
         params["lat"] = f"{bias_coord[0]:.5f}"
         params["lon"] = f"{bias_coord[1]:.5f}"
     url = f"https://photon.komoot.io/api/?{urlencode(params)}"
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": "ControleDeVistoriasAD/2.0"},
-    )
+    req = urllib.request.Request(url, headers={"User-Agent": "ControleDeVistoriasAD/3.0"})
     try:
-        with urllib.request.urlopen(req, timeout=4) as resp:
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
             dados = json.loads(resp.read().decode("utf-8"))
             feats = dados.get("features") or []
             if feats:
@@ -978,11 +1085,10 @@ def _buscar_nominatim(query: str):
     url = f"https://nominatim.openstreetmap.org/search?{params}"
     req = urllib.request.Request(
         url,
-        headers={"User-Agent": "ControleDeVistoriasAD/2.0 (adrastreamentos@gmail.com)"},
+        headers={"User-Agent": "ControleDeVistoriasAD/3.0 (adrastreamentos@gmail.com)"},
     )
     try:
-        time_mod.sleep(0.35)
-        with urllib.request.urlopen(req, timeout=4) as resp:
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
             dados = json.loads(resp.read().decode("utf-8"))
             if dados:
                 return float(dados[0]["lat"]), float(dados[0]["lon"])
@@ -992,63 +1098,75 @@ def _buscar_nominatim(query: str):
 
 
 def geocodificar_endereco(endereco: str, bias_coord=None, contexto_cidade: str = ""):
+    """Geocodifica com cache persistente em servidor (inclusive cache curto para falhas)."""
     texto = _normalizar_endereco_br(endereco)
     if len(texto) < 3:
         return None
 
     chave = f"{texto.lower()}|{contexto_cidade.lower()}"
-    if chave in st.session_state.geo_cache:
-        return st.session_state.geo_cache[chave]
+    agora = time_mod.time()
+    entrada = GEO_STORE["geo"].get(chave)
+    if entrada is not None:
+        valor, exp = entrada
+        if agora < exp:
+            return valor
 
     tentativas = []
     via_cep = _resolver_cep_viacep(texto)
     if via_cep:
         tentativas.append(via_cep)
 
-    tentativas.append(texto)
     if contexto_cidade and contexto_cidade.lower() not in texto.lower():
         tentativas.append(f"{texto}, {contexto_cidade}")
-    if "brasil" not in texto.lower():
-        tentativas.append(f"{texto}, Brasil")
+    tentativas.append(texto)
 
     sem_num = re.sub(r"\b(?:n[º°]?\.?\s*)?\d+[A-Za-z]?\b", "", texto).strip(" ,-")
     if sem_num and sem_num != texto and len(sem_num) >= 4:
-        tentativas.append(sem_num)
         if contexto_cidade and contexto_cidade.lower() not in sem_num.lower():
             tentativas.append(f"{sem_num}, {contexto_cidade}")
-
-    for t in tentativas:
-        coord = _buscar_photon(t, bias_coord=bias_coord)
-        if coord:
-            st.session_state.geo_cache[chave] = coord
-            return coord
+        else:
+            tentativas.append(sem_num)
 
     for t in tentativas[:3]:
-        coord = _buscar_nominatim(t)
+        coord = _buscar_photon(t, bias_coord=bias_coord)
         if coord:
-            st.session_state.geo_cache[chave] = coord
+            GEO_STORE["geo"][chave] = (coord, agora + 86400)
             return coord
 
+    for t in tentativas[:2]:
+        coord = _buscar_nominatim(t)
+        if coord:
+            GEO_STORE["geo"][chave] = (coord, agora + 86400)
+            return coord
+
+    # Cacheia falha por 15 minutos para não travar a tela em todo clique
+    GEO_STORE["geo"][chave] = (None, agora + 900)
     return None
 
 
-def calcular_distancia_rota(origem_end: str, destino_end: str):
+def calcular_distancia_rota(origem_end: str, destino_end: str, c_orig_pre=None):
+    """Retorna dict {'km': float, 'minutos': int, 'estimada': bool} ou None."""
     orig = str(origem_end or "").strip()
     dest = str(destino_end or "").strip()
     if len(orig) < 3 or len(dest) < 3:
         return None
 
     chave_rota = f"{orig.lower()}=>{dest.lower()}"
-    if chave_rota in st.session_state.rota_cache:
-        return st.session_state.rota_cache[chave_rota]
+    agora = time_mod.time()
+    entrada = GEO_STORE["rota"].get(chave_rota)
+    if entrada is not None:
+        valor, exp = entrada
+        if agora < exp:
+            return valor
 
-    c_orig = geocodificar_endereco(orig)
+    c_orig = c_orig_pre if c_orig_pre else geocodificar_endereco(orig)
     if not c_orig:
         return None
 
     ctx_cidade = _extrair_contexto_cidade(orig)
     c_dest = geocodificar_endereco(dest, bias_coord=c_orig, contexto_cidade=ctx_cidade)
     if not c_dest:
+        GEO_STORE["rota"][chave_rota] = (None, agora + 900)
         return None
 
     lat1, lon1 = c_orig
@@ -1058,16 +1176,16 @@ def calcular_distancia_rota(origem_end: str, destino_end: str):
         f"https://router.project-osrm.org/route/v1/driving/"
         f"{lon1},{lat1};{lon2},{lat2}?overview=false"
     )
-    req = urllib.request.Request(url, headers={"User-Agent": "ControleDeVistoriasAD/2.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "ControleDeVistoriasAD/3.0"})
     try:
-        with urllib.request.urlopen(req, timeout=3.5) as resp:
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
             dados = json.loads(resp.read().decode("utf-8"))
             if dados.get("code") == "Ok" and dados.get("routes"):
                 rota = dados["routes"][0]
                 km = float(rota["distance"]) / 1000.0
                 minutos = max(2, round(float(rota["duration"]) / 60.0))
                 res = {"km": km, "minutos": minutos, "estimada": False}
-                st.session_state.rota_cache[chave_rota] = res
+                GEO_STORE["rota"][chave_rota] = (res, agora + 86400)
                 return res
     except Exception:
         pass
@@ -1075,13 +1193,54 @@ def calcular_distancia_rota(origem_end: str, destino_end: str):
     km_est = _haversine_km(lat1, lon1, lat2, lon2) * 1.25
     min_est = max(2, round((km_est / 30.0) * 60.0))
     res = {"km": km_est, "minutos": min_est, "estimada": True}
-    st.session_state.rota_cache[chave_rota] = res
+    GEO_STORE["rota"][chave_rota] = (res, agora + 86400)
     return res
 
 
+def calcular_distancias_em_lote(ponto_base: str, lista_ags: list) -> dict:
+    """Calcula distâncias de todos os agendamentos em paralelo (muito mais rápido)."""
+    if not ponto_base or not lista_ags:
+        return {}
+
+    c_orig = geocodificar_endereco(ponto_base)
+    if not c_orig:
+        return {}
+
+    enderecos_unicos = list(
+        {(ag.get("endereco") or "").strip() for ag in lista_ags if (ag.get("endereco") or "").strip()}
+    )
+    if not enderecos_unicos:
+        return {}
+
+    por_endereco = {}
+    if len(enderecos_unicos) == 1:
+        end0 = enderecos_unicos[0]
+        por_endereco[end0] = calcular_distancia_rota(ponto_base, end0, c_orig_pre=c_orig)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+            futuros = {
+                ex.submit(calcular_distancia_rota, ponto_base, end, c_orig): end
+                for end in enderecos_unicos
+            }
+            for fut in concurrent.futures.as_completed(futuros):
+                end = futuros[fut]
+                try:
+                    por_endereco[end] = fut.result()
+                except Exception:
+                    por_endereco[end] = None
+
+    resultado = {}
+    for ag in lista_ags:
+        end_ag = (ag.get("endereco") or "").strip()
+        if end_ag and por_endereco.get(end_ag):
+            resultado[ag["id"]] = por_endereco[end_ag]
+    return resultado
+
+
 # =========================================================
-# CONSULTAS AO BANCO DE DADOS (APENAS TABELAS DE VISTORIAS)
+# CONSULTAS AO BANCO COM CACHE RÁPIDO (SEM FOTOS PESADAS)
 # =========================================================
+@st.cache_data(ttl=120, show_spinner=False)
 def carregar_perfil():
     try:
         res = supabase.table("vistorias_perfil").select("*").order("id").limit(1).execute()
@@ -1092,6 +1251,7 @@ def carregar_perfil():
         return {"id": None, "nome": "", "telefone": "", "ponto_base": "", "_erro_tabela": True}
 
 
+@st.cache_data(ttl=120, show_spinner=False)
 def carregar_empresas():
     try:
         res = supabase.table("vistorias_empresas").select("*").order("nome").execute()
@@ -1101,6 +1261,7 @@ def carregar_empresas():
         return []
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def carregar_agendamentos(apenas_agendadas=True):
     try:
         q = supabase.table("agendamentos").select("*")
@@ -1113,8 +1274,44 @@ def carregar_agendamentos(apenas_agendadas=True):
         return []
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def carregar_vistorias(ano=None, mes=None):
+    """Carrega apenas colunas leves (sem baixar fotos base64 na listagem)."""
+    try:
+        q = supabase.table("vistorias").select(COLUNAS_VISTORIA_LEVE)
+        if ano and mes:
+            inicio = date(ano, mes, 1)
+            fim = date(ano + 1, 1, 1) if mes == 12 else date(ano, mes + 1, 1)
+            q = q.gte("data_vistoria", inicio.isoformat()).lt("data_vistoria", fim.isoformat())
+        res = q.order("data_vistoria", desc=True).order("id", desc=True).execute()
+        return res.data or []
+    except Exception as e:
+        st.error(f"Erro ao carregar vistorias: {e}")
+        return []
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def carregar_foto_os(os_id: int):
+    """Baixa a foto somente quando o usuário pede para ver ou gerar PDF individual."""
+    try:
+        res = supabase.table("vistorias").select("foto_base64").eq("id", os_id).limit(1).execute()
+        if res.data:
+            return res.data[0].get("foto_base64")
+    except Exception:
+        return None
+    return None
+
+
+def limpar_cache_dados():
+    carregar_perfil.clear()
+    carregar_empresas.clear()
+    carregar_agendamentos.clear()
+    carregar_vistorias.clear()
+    gerar_pdf_lote_cached.clear()
+
+
 def verificar_conflito_horario(data_iso: str, hora_hhmm: str, ignorar_id=None):
-    """Bloqueia qualquer agendamento no mesmo dia e horário (ignora agendamentos Frustrados)."""
+    """Consulta em tempo real para bloquear horário duplicado (ignora Frustrada)."""
     alvo = normalizar_hora(hora_hhmm)
     try:
         res = (
@@ -1133,20 +1330,6 @@ def verificar_conflito_horario(data_iso: str, hora_hhmm: str, ignorar_id=None):
     except Exception:
         return None
     return None
-
-
-def carregar_vistorias(ano=None, mes=None):
-    try:
-        q = supabase.table("vistorias").select("*")
-        if ano and mes:
-            inicio = date(ano, mes, 1)
-            fim = date(ano + 1, 1, 1) if mes == 12 else date(ano, mes + 1, 1)
-            q = q.gte("data_vistoria", inicio.isoformat()).lt("data_vistoria", fim.isoformat())
-        res = q.order("data_vistoria", desc=True).order("id", desc=True).execute()
-        return res.data or []
-    except Exception as e:
-        st.error(f"Erro ao carregar vistorias: {e}")
-        return []
 
 
 def iniciar_os_a_partir_agendamento(ag: dict, mapa_empresas: dict):
@@ -1233,7 +1416,6 @@ def render_card_agendamento(
 
     serv_badge = f'&nbsp;<span class="cv-badge-amber">🔧 {esc(tipo_serv_ag)}</span>' if tipo_serv_ag else ""
 
-    # Bloco lateral com KM + tempo (~min) + estrelinha no mais próximo
     dist_lateral_html = ""
     if dist_info:
         aprox = "~" if dist_info.get("estimada") else ""
@@ -1334,6 +1516,7 @@ def render_card_agendamento(
                             }
                         ).execute()
                         supabase.table("agendamentos").update({"status": "Concluida"}).eq("id", ag["id"]).execute()
+                        limpar_cache_dados()
                         st.session_state.aviso_sucesso = (
                             f"Atendimento de {emp_nome} ({tipo_serv_ag or 'Rastreamento'}) concluído!"
                         )
@@ -1351,6 +1534,7 @@ def render_card_agendamento(
             with bc3:
                 if st.button("🗑️", key=f"{prefixo}_del_{ag['id']}", help="Remover", use_container_width=True):
                     supabase.table("agendamentos").delete().eq("id", ag["id"]).execute()
+                    limpar_cache_dados()
                     st.session_state.aviso_sucesso = "Agendamento removido."
                     st.rerun()
         else:
@@ -1366,6 +1550,7 @@ def render_card_agendamento(
             with bc2:
                 if st.button("🗑️", key=f"{prefixo}_del_{ag['id']}", help="Remover", use_container_width=True):
                     supabase.table("agendamentos").delete().eq("id", ag["id"]).execute()
+                    limpar_cache_dados()
                     st.session_state.aviso_sucesso = "Agendamento removido."
                     st.rerun()
 
@@ -1378,7 +1563,6 @@ def render_card_agendamento(
         with st.expander(rotulo_exp_ag):
             tab_cor, tab_reag, tab_frust = st.tabs(["✏️ Corrigir", "🔄 Reagendar", "❌ Frustrada"])
 
-            # --- ABA 1: CORRIGIR DADOS ---
             with tab_cor:
                 opcoes_ag_emp = sorted({e for e in (nomes_empresas + [emp_nome]) if e})
                 if opcoes_ag_emp:
@@ -1479,13 +1663,13 @@ def render_card_agendamento(
                                     "observacao": ea_obs.strip(),
                                 }
                             ).eq("id", ag["id"]).execute()
+                            limpar_cache_dados()
                             st.session_state.form_ag_ver += 1
                             st.session_state.aviso_sucesso = "Agendamento atualizado!"
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Erro ao salvar alterações (confirme se rodou o SQL da coluna observacao): {e}")
+                            st.error(f"Erro ao salvar alterações: {e}")
 
-            # --- ABA 2: REAGENDAR ---
             with tab_reag:
                 st.caption(
                     f"Agendamento atual: **{fmt_data_br(ag.get('data_agendamento'))} às {ag.get('hora_agendamento', '')}**"
@@ -1550,15 +1734,15 @@ def render_card_agendamento(
                                     "observacao": obs_final,
                                 }
                             ).eq("id", ag["id"]).execute()
+                            limpar_cache_dados()
                             st.session_state.form_ag_ver += 1
                             st.session_state.aviso_sucesso = (
                                 f"Atendimento reagendado para {nova_data_r.strftime('%d/%m/%Y')} às {nova_hora_fmt}!"
                             )
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Erro ao reagendar (confirme se rodou o SQL da coluna observacao): {e}")
+                            st.error(f"Erro ao reagendar: {e}")
 
-            # --- ABA 3: FRUSTRADA ---
             with tab_frust:
                 st.caption(
                     "Use esta opção quando não foi possível realizar o serviço. "
@@ -1585,13 +1769,14 @@ def render_card_agendamento(
                                 "observacao": obs_f,
                             }
                         ).eq("id", ag["id"]).execute()
+                        limpar_cache_dados()
                         st.session_state.form_ag_ver += 1
                         st.session_state.aviso_sucesso = (
                             "Atendimento marcado como Frustrada. Você pode reagendá-lo quando combinar com o cliente."
                         )
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Erro ao marcar como frustrada (confirme se rodou o SQL da coluna observacao): {e}")
+                        st.error(f"Erro ao marcar como frustrada: {e}")
 
 
 def render_editor_os(vistoria: dict, mapa_empresas: dict, nomes_empresas: list, prefixo_key: str):
@@ -1686,6 +1871,8 @@ def render_editor_os(vistoria: dict, mapa_empresas: dict, nomes_empresas: list, 
                             "data_recebimento": nova_data_rec,
                         }
                     ).eq("id", vistoria["id"]).execute()
+                    limpar_cache_dados()
+                    st.session_state.pdfs_prontos.pop(vistoria["id"], None)
                     st.session_state.fin_edit_ver += 1
                     st.session_state.aviso_sucesso = f"OS #{vistoria['id']} atualizada com sucesso!"
                     st.rerun()
@@ -1695,6 +1882,8 @@ def render_editor_os(vistoria: dict, mapa_empresas: dict, nomes_empresas: list, 
         if excluir_os:
             try:
                 supabase.table("vistorias").delete().eq("id", vistoria["id"]).execute()
+                limpar_cache_dados()
+                st.session_state.pdfs_prontos.pop(vistoria["id"], None)
                 st.session_state.fin_edit_ver += 1
                 st.session_state.aviso_sucesso = f"OS #{vistoria['id']} excluída com sucesso!"
                 st.rerun()
@@ -1703,9 +1892,9 @@ def render_editor_os(vistoria: dict, mapa_empresas: dict, nomes_empresas: list, 
 
 
 # =========================================================
-# GERADORES DE PDF (INDIVIDUAL E EM LOTE)
+# GERADORES DE PDF (SOB DEMANDA E COM CACHE)
 # =========================================================
-def gerar_pdf_individual(vistoria: dict) -> bytes:
+def gerar_pdf_individual(vistoria: dict, foto_base64: str = None) -> bytes:
     pdf = FPDF()
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -1748,13 +1937,13 @@ def gerar_pdf_individual(vistoria: dict) -> bytes:
         pdf.set_font("Helvetica", "", 11)
         pdf.multi_cell(0, 8, limpar_latin1(str(valor)), border=0)
 
-    if vistoria.get("foto_base64"):
+    if foto_base64:
         pdf.ln(6)
         pdf.set_font("Helvetica", "B", 12)
         pdf.cell(0, 8, limpar_latin1("Registro Fotográfico do Veículo"), ln=True)
         tmp_path = None
         try:
-            img_bytes = base64_para_bytes(vistoria["foto_base64"])
+            img_bytes = base64_para_bytes(foto_base64)
             with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                 tmp.write(img_bytes)
                 tmp_path = tmp.name
@@ -1778,7 +1967,9 @@ def gerar_pdf_individual(vistoria: dict) -> bytes:
     return bytes(pdf.output())
 
 
-def gerar_pdf_lote(vistorias: list, titulo_periodo: str, empresa_filtro: str = "Todas") -> bytes:
+@st.cache_data(ttl=300, show_spinner=False)
+def gerar_pdf_lote_cached(vistorias_json: str, titulo_periodo: str, empresa_filtro: str = "Todas") -> bytes:
+    vistorias = json.loads(vistorias_json)
     pdf = FPDF()
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -1852,6 +2043,11 @@ def gerar_pdf_lote(vistorias: list, titulo_periodo: str, empresa_filtro: str = "
     return bytes(pdf.output())
 
 
+def gerar_pdf_lote(vistorias: list, titulo_periodo: str, empresa_filtro: str = "Todas") -> bytes:
+    payload = json.dumps(vistorias, sort_keys=True, default=str)
+    return gerar_pdf_lote_cached(payload, titulo_periodo, empresa_filtro)
+
+
 # =========================================================
 # BOTÃO CLARO / ESCURO
 # =========================================================
@@ -1883,10 +2079,14 @@ def tela_login():
 
     col_esq, col_centro, col_dir = st.columns([0.1, 0.8, 0.1])
     with col_centro:
+        if st.session_state.get("aviso_expirado"):
+            st.info("⏱️ Sua sessão expirou após 1 hora de inatividade. Entre novamente.")
+            st.session_state.aviso_expirado = False
+
         with st.form("form_login"):
             usuario = st.text_input("Usuário")
             senha = st.text_input("Senha", type="password")
-            st.checkbox("Lembrar de mim", value=True)
+            lembrar = st.checkbox("Manter conectado (1 hora de inatividade)", value=True)
             entrar = st.form_submit_button("Entrar →", type="primary", use_container_width=True)
 
             if entrar:
@@ -1895,7 +2095,13 @@ def tela_login():
                     and senha.strip() == LOGIN_SENHA
                 ):
                     st.session_state.autenticado = True
+                    st.session_state.manter_conectado = lembrar
+                    st.session_state.ultimo_acesso = int(time_mod.time())
                     st.session_state.pagina = "Agenda"
+                    if lembrar:
+                        _definir_token_url(_criar_token_sessao())
+                    else:
+                        _limpar_token_url()
                     st.rerun()
                 else:
                     st.error("Usuário ou senha inválidos. Verifique e tente novamente.")
@@ -1940,8 +2146,9 @@ def tela_perfil():
                     supabase.table("vistorias_perfil").update(payload).eq("id", perfil["id"]).execute()
                 else:
                     supabase.table("vistorias_perfil").insert(payload).execute()
-                st.session_state.geo_cache = {}
-                st.session_state.rota_cache = {}
+                GEO_STORE["geo"].clear()
+                GEO_STORE["rota"].clear()
+                limpar_cache_dados()
                 st.session_state.aviso_sucesso = "Perfil e Ponto Base salvos com sucesso!"
                 st.rerun()
             except Exception as e:
@@ -1957,7 +2164,7 @@ def tela_perfil():
                     <div class="cv-card-green-title">✅ Ponto Base localizado no mapa</div>
                     <div class="cv-card-green-sub">
                         📍 {esc(base_atual)}<br>
-                        Todos os agendamentos com endereço exibirão km e tempo estimado a partir daqui.
+                        As distâncias (km e tempo) na tela usam este endereço como referência. Ao clicar em <strong>🗺️ Rota</strong>, o Google Maps parte automaticamente de onde o seu celular estiver.
                     </div>
                 </div>
                 """
@@ -1972,7 +2179,7 @@ def tela_perfil():
 
 
 # =========================================================
-# TELA 2: AGENDA DE VISTORIAS (ATRASADAS / FRUSTRADAS + KM)
+# TELA 2: AGENDA DE VISTORIAS (RÁPIDA + PARALELA + ATRASOS)
 # =========================================================
 def tela_agenda():
     st.markdown("### 📅 Agenda de Vistorias")
@@ -2083,6 +2290,7 @@ def tela_agenda():
                                 "status": "Agendada",
                             }
                         ).execute()
+                        limpar_cache_dados()
                         st.session_state.form_ag_ver += 1
                         if data_ag == hoje:
                             st.session_state.agenda_filtro = "Hoje"
@@ -2142,7 +2350,7 @@ def tela_agenda():
                 st.session_state.agenda_data_busca = data_pesquisa
                 st.rerun()
 
-    # VISÃO ATRASADAS / FRUSTRADAS (PARA REAGENDAMENTO RÁPIDO)
+    # VISÃO ATRASADAS / FRUSTRADAS
     if st.session_state.agenda_filtro == "Atrasadas":
         st.markdown(f"#### ⚠️ Atendimentos Atrasados ou Frustrados ({len(atrasadas_ou_frustradas)})")
         if not atrasadas_ou_frustradas:
@@ -2152,19 +2360,15 @@ def tela_agenda():
         st.caption(
             "Clique em **💬 WhatsApp** para falar com o cliente ou abra **🔄 Reagendar / Corrigir / Frustrada** para remarcar outra data e registrar o motivo."
         )
+        dists_atraso = calcular_distancias_em_lote(ponto_base, atrasadas_ou_frustradas)
         for ag in atrasadas_ou_frustradas:
-            d_info = (
-                calcular_distancia_rota(ponto_base, ag.get("endereco"))
-                if (ponto_base and (ag.get("endereco") or "").strip())
-                else None
-            )
             render_card_agendamento(
                 ag,
                 mapa_empresas,
                 nomes_empresas,
                 prefixo="ag_atraso",
                 ponto_base=ponto_base,
-                dist_info=d_info,
+                dist_info=dists_atraso.get(ag["id"]),
                 mostrar_data=True,
             )
         return
@@ -2183,6 +2387,7 @@ def tela_agenda():
             st.info("Nenhum agendamento registrado para esta semana.")
             return
 
+        dists_sem = calcular_distancias_em_lote(ponto_base, semana_ags)
         por_dia = {}
         for ag in semana_ags:
             por_dia.setdefault(str(ag.get("data_agendamento", ""))[:10], []).append(ag)
@@ -2203,17 +2408,10 @@ def tela_agenda():
                     st.session_state.agenda_data_busca = dt_obj
                     st.rerun()
 
-            dist_dia_sem = {}
-            if ponto_base:
-                for ag in lista_dia:
-                    if (ag.get("endereco") or "").strip():
-                        d_i = calcular_distancia_rota(ponto_base, ag["endereco"])
-                        if d_i:
-                            dist_dia_sem[ag["id"]] = d_i
             pends_sem = [
-                (a, dist_dia_sem[a["id"]])
+                (a, dists_sem[a["id"]])
                 for a in lista_dia
-                if a["id"] in dist_dia_sem and a.get("status") == "Agendada"
+                if a["id"] in dists_sem and a.get("status") == "Agendada"
             ]
             pends_sem.sort(key=lambda x: x[1]["km"])
             id_prox_sem = pends_sem[0][0]["id"] if pends_sem else None
@@ -2225,7 +2423,7 @@ def tela_agenda():
                     nomes_empresas,
                     prefixo=f"sem_{dt_iso}",
                     ponto_base=ponto_base,
-                    dist_info=dist_dia_sem.get(ag["id"]),
+                    dist_info=dists_sem.get(ag["id"]),
                     eh_mais_proximo=(ag["id"] == id_prox_sem),
                     mostrar_data=False,
                 )
@@ -2243,14 +2441,7 @@ def tela_agenda():
         ag for ag in todos_agendamentos if str(ag.get("data_agendamento", ""))[:10] == data_ref.isoformat()
     ]
 
-    distancias_dia = {}
-    if ponto_base and ags_do_dia:
-        for ag in ags_do_dia:
-            end_ag = (ag.get("endereco") or "").strip()
-            if end_ag:
-                info = calcular_distancia_rota(ponto_base, end_ag)
-                if info:
-                    distancias_dia[ag["id"]] = info
+    distancias_dia = calcular_distancias_em_lote(ponto_base, ags_do_dia)
 
     todos_com_dist = [(ag, distancias_dia[ag["id"]]) for ag in ags_do_dia if ag["id"] in distancias_dia]
     todos_com_dist.sort(key=lambda par: par[1]["km"])
@@ -2555,6 +2746,7 @@ def tela_ordem_servico():
                         supabase.table("agendamentos").update({"status": "Concluida"}).eq(
                             "id", imp["agendamento_id"]
                         ).execute()
+                    limpar_cache_dados()
                     st.session_state.os_importada = None
                     st.session_state.modalidade_os = "Nova"
                     st.session_state.form_os_ver += 1
@@ -2572,7 +2764,6 @@ def tela_ordem_servico():
     atrasadas_frust = [
         a for a in todos_ags if a.get("status") == "Frustrada" or agendamento_esta_atrasado(a)
     ]
-    vistorias = carregar_vistorias()
 
     qtd_af = len(atrasadas_frust)
     lbl_af = f"⚠️ Atrasadas / Frustradas ({qtd_af})" if qtd_af else "⚠️ Atrasadas / Frustradas"
@@ -2596,6 +2787,7 @@ def tela_ordem_servico():
                 st.rerun()
 
     if st.session_state.os_subaba == "OS do Dia":
+        vistorias = carregar_vistorias()
         ags_hoje = [
             a
             for a in todos_ags
@@ -2608,13 +2800,7 @@ def tela_ordem_servico():
         if not ags_hoje:
             st.info("Nenhuma Ordem de Serviço pendente na agenda de hoje.")
         else:
-            dists_hoje = {}
-            if ponto_base:
-                for ag in ags_hoje:
-                    if (ag.get("endereco") or "").strip():
-                        d_i = calcular_distancia_rota(ponto_base, ag["endereco"])
-                        if d_i:
-                            dists_hoje[ag["id"]] = d_i
+            dists_hoje = calcular_distancias_em_lote(ponto_base, ags_hoje)
             ordenados_h = sorted(
                 [(a["id"], dists_hoje[a["id"]]) for a in ags_hoje if a["id"] in dists_hoje and a.get("status") == "Agendada"],
                 key=lambda x: x[1]["km"],
@@ -2646,19 +2832,15 @@ def tela_ordem_servico():
         if not proximas:
             st.info("Nenhuma Ordem de Serviço futura agendada.")
         else:
+            dists_prox = calcular_distancias_em_lote(ponto_base, proximas)
             for ag in proximas:
-                d_info = (
-                    calcular_distancia_rota(ponto_base, ag.get("endereco"))
-                    if (ponto_base and (ag.get("endereco") or "").strip())
-                    else None
-                )
                 render_card_agendamento(
                     ag,
                     mapa_empresas,
                     nomes_empresas,
                     prefixo="os_prox",
                     ponto_base=ponto_base,
-                    dist_info=d_info,
+                    dist_info=dists_prox.get(ag["id"]),
                     mostrar_data=True,
                 )
 
@@ -2667,23 +2849,20 @@ def tela_ordem_servico():
         if not atrasadas_frust:
             st.success("Nenhuma Ordem de Serviço atrasada ou frustrada!")
         else:
+            dists_af = calcular_distancias_em_lote(ponto_base, atrasadas_frust)
             for ag in atrasadas_frust:
-                d_info = (
-                    calcular_distancia_rota(ponto_base, ag.get("endereco"))
-                    if (ponto_base and (ag.get("endereco") or "").strip())
-                    else None
-                )
                 render_card_agendamento(
                     ag,
                     mapa_empresas,
                     nomes_empresas,
                     prefixo="os_atraso",
                     ponto_base=ponto_base,
-                    dist_info=d_info,
+                    dist_info=dists_af.get(ag["id"]),
                     mostrar_data=True,
                 )
 
     else:
+        vistorias = carregar_vistorias()
         st.markdown(f"#### 🗂️ Histórico de Ordens de Serviço ({len(vistorias)})")
         if not vistorias:
             st.info("Nenhuma Ordem de Serviço concluída ainda.")
@@ -2722,8 +2901,19 @@ def _render_card_os_concluida(v: dict, mapa_empresas: dict, nomes_empresas: list
     with st.expander(f"Ver foto / Corrigir / Excluir — OS #{v['id']}"):
         if v.get("cliente_nome"):
             st.write(f"**Cliente:** {v['cliente_nome']}")
-        if v.get("foto_base64"):
-            st.image(base64_para_bytes(v["foto_base64"]), width=260)
+
+        chave_foto = f"{prefixo}_{v['id']}"
+        if chave_foto in st.session_state.fotos_abertas:
+            foto_b64 = carregar_foto_os(v["id"])
+            if foto_b64:
+                st.image(base64_para_bytes(foto_b64), width=260)
+            else:
+                st.caption("Sem foto anexada nesta OS.")
+        else:
+            if st.button("📷 Ver foto anexada", key=f"ver_foto_{chave_foto}"):
+                st.session_state.fotos_abertas.add(chave_foto)
+                st.rerun()
+
         render_editor_os(v, mapa_empresas, nomes_empresas, prefixo_key=prefixo)
 
 
@@ -2815,6 +3005,7 @@ def tela_empresas():
                             "valor_padrao": float(valor_padrao),
                         }
                     ).execute()
+                    limpar_cache_dados()
                     st.session_state.form_emp_ver += 1
                     st.session_state.aviso_sucesso = f"Empresa '{nome.strip()}' cadastrada com sucesso!"
                     st.rerun()
@@ -2932,12 +3123,14 @@ def tela_empresas():
                             "valor_padrao": float(e_val),
                         }
                     ).eq("id", emp["id"]).execute()
+                    limpar_cache_dados()
                     st.session_state.form_emp_ver += 1
                     st.session_state.aviso_sucesso = f"Alterações de '{e_nome.strip()}' salvas!"
                     st.rerun()
             with b2:
                 if st.button("Excluir Empresa", key=f"ee_del_{emp['id']}_{ver}", use_container_width=True):
                     supabase.table("vistorias_empresas").delete().eq("id", emp["id"]).execute()
+                    limpar_cache_dados()
                     st.session_state.form_emp_ver += 1
                     st.session_state.aviso_sucesso = f"Empresa '{emp['nome']}' removida."
                     st.rerun()
@@ -3054,6 +3247,7 @@ def tela_financeiro():
                             "data_recebimento": hoje_br().isoformat(),
                         }
                     ).in_("id", ids).execute()
+                    limpar_cache_dados()
                     st.session_state.aviso_sucesso = f"Baixa registrada para {emp_nome}!"
                     st.rerun()
             with col_pdf:
@@ -3113,6 +3307,7 @@ def tela_financeiro():
                 supabase.table("vistorias").update(
                     {"status_pagamento": "Pendente", "data_recebimento": None}
                 ).in_("id", ids).execute()
+                limpar_cache_dados()
                 st.session_state.aviso_sucesso = f"Baixa de {emp_nome} desfeita."
                 st.rerun()
 
@@ -3122,7 +3317,7 @@ def tela_financeiro():
 
 
 # =========================================================
-# TELA 6: RELATÓRIOS EM PDF
+# TELA 6: RELATÓRIOS EM PDF (RÁPIDO, SOB DEMANDA)
 # =========================================================
 def tela_pdf():
     st.markdown("### 📄 Relatórios em PDF")
@@ -3197,21 +3392,42 @@ def tela_pdf():
         with st.expander(f"Ver foto / PDF / Corrigir / Excluir — OS #{v['id']}"):
             if v.get("cliente_nome"):
                 st.write(f"**Cliente:** {v['cliente_nome']}")
-            if v.get("foto_base64"):
-                st.image(base64_para_bytes(v["foto_base64"]), width=280)
-            else:
-                st.caption("Sem foto anexada.")
 
-            if PDF_DISPONIVEL:
-                pdf_ind = gerar_pdf_individual(v)
-                st.download_button(
-                    "📄 Baixar PDF Individual",
-                    data=pdf_ind,
-                    file_name=f"OS_{v['id']}_{v['placa']}.pdf",
-                    mime="application/pdf",
-                    key=f"pdf_ind_{v['id']}",
-                    use_container_width=True,
-                )
+            p_col1, p_col2 = st.columns(2)
+            chave_foto = f"pdf_{v['id']}"
+            with p_col1:
+                if chave_foto in st.session_state.fotos_abertas:
+                    foto_b64 = carregar_foto_os(v["id"])
+                    if foto_b64:
+                        st.image(base64_para_bytes(foto_b64), width=260)
+                    else:
+                        st.caption("Sem foto anexada.")
+                else:
+                    if st.button("📷 Ver foto anexada", key=f"ver_foto_{chave_foto}", use_container_width=True):
+                        st.session_state.fotos_abertas.add(chave_foto)
+                        st.rerun()
+
+            with p_col2:
+                if PDF_DISPONIVEL:
+                    if v["id"] in st.session_state.pdfs_prontos:
+                        st.download_button(
+                            "⬇️ Baixar PDF Individual",
+                            data=st.session_state.pdfs_prontos[v["id"]],
+                            file_name=f"OS_{v['id']}_{v['placa']}.pdf",
+                            mime="application/pdf",
+                            key=f"dl_pdf_ind_{v['id']}",
+                            type="primary",
+                            use_container_width=True,
+                        )
+                    else:
+                        if st.button(
+                            "📄 Gerar PDF Individual",
+                            key=f"gen_pdf_ind_{v['id']}",
+                            use_container_width=True,
+                        ):
+                            foto_b64 = carregar_foto_os(v["id"])
+                            st.session_state.pdfs_prontos[v["id"]] = gerar_pdf_individual(v, foto_b64)
+                            st.rerun()
 
             st.markdown("---")
             render_editor_os(v, mapa_empresas, nomes_empresas, prefixo_key="pdf_tab")
@@ -3221,6 +3437,8 @@ def tela_pdf():
 # BARRA SUPERIOR E NAVEGAÇÃO PRINCIPAL
 # =========================================================
 def main():
+    sincronizar_sessao()
+
     if not st.session_state.autenticado:
         tela_login()
         return
@@ -3243,6 +3461,7 @@ def main():
         if st.button("🚪 Sair", use_container_width=True):
             st.session_state.autenticado = False
             st.session_state.os_importada = None
+            _limpar_token_url()
             st.rerun()
 
     abas = [
