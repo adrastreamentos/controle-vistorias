@@ -1,4 +1,5 @@
 import base64
+import html
 import io
 import json
 import math
@@ -72,6 +73,16 @@ DIAS_SEMANA_COMPLETO = [
     "Sábado",
     "Domingo",
 ]
+
+
+def render_html(bloco_html: str):
+    """Remove linhas em branco e recuos para o Markdown nunca quebrar o HTML."""
+    limpo = "\n".join(linha.strip() for linha in bloco_html.splitlines() if linha.strip())
+    st.markdown(limpo, unsafe_allow_html=True)
+
+
+def esc(texto) -> str:
+    return html.escape(str(texto or ""))
 
 
 # =========================================================
@@ -832,7 +843,6 @@ def geocodificar_endereco(endereco: str):
     if "brasil" not in texto.lower():
         tentativas.append(f"{texto}, Brasil")
 
-    # Se tiver número de casa/apt que o mapa não indexou, tenta sem o número
     sem_num = re.sub(r"\b(?:n[º°]?\.?\s*)?\d+[A-Za-z]?\b", "", texto).strip(" ,-")
     if sem_num and sem_num != texto and len(sem_num) >= 4:
         tentativas.append(sem_num)
@@ -857,7 +867,6 @@ def calcular_distancia_rota(origem_end: str, destino_end: str):
     lat1, lon1 = c_orig
     lat2, lon2 = c_dest
 
-    # Tenta distância real de carro via OSRM
     url = (
         f"https://router.project-osrm.org/route/v1/driving/"
         f"{lon1},{lat1};{lon2},{lat2}?overview=false"
@@ -874,7 +883,6 @@ def calcular_distancia_rota(origem_end: str, destino_end: str):
     except Exception:
         pass
 
-    # Fallback: distância geodésica * fator viário (1.25)
     km_est = _haversine_km(lat1, lon1, lat2, lon2) * 1.25
     min_est = max(1, round((km_est / 32.0) * 60.0))
     return {"km": km_est, "minutos": min_est, "estimada": True}
@@ -993,7 +1001,7 @@ def render_card_agendamento(
         if concluida
         else '<span class="cv-badge-purple">✔ Preenchido</span>'
     )
-    serv_badge = f'&nbsp;<span class="cv-badge-amber">🔧 {tipo_serv_ag}</span>' if tipo_serv_ag else ""
+    serv_badge = f'&nbsp;<span class="cv-badge-amber">🔧 {esc(tipo_serv_ag)}</span>' if tipo_serv_ag else ""
 
     dist_badges = ""
     if dist_info:
@@ -1004,9 +1012,9 @@ def render_card_agendamento(
             dist_badges = '<span class="cv-badge-green">⭐ Mais próximo</span>&nbsp;' + dist_badges
 
     topo_tempo = (
-        f"📅 {fmt_data_br(ag.get('data_agendamento'))} • ⏰ {ag.get('hora_agendamento', '')}"
+        f"📅 {fmt_data_br(ag.get('data_agendamento'))} • ⏰ {esc(ag.get('hora_agendamento', ''))}"
         if mostrar_data
-        else f"⏰ {ag.get('hora_agendamento', '')}"
+        else f"⏰ {esc(ag.get('hora_agendamento', ''))}"
     )
 
     if concluida:
@@ -1018,46 +1026,41 @@ def render_card_agendamento(
 
     title_cls = "cv-card-green-title" if concluida else "cv-card-title"
     sub_cls = "cv-card-green-sub" if concluida else "cv-card-sub"
-    end_html = (
-        f'<div class="{sub_cls}">📍 {endereco_cli}</div>'
-        if endereco_cli
-        else ""
-    )
+    end_html = f'<div class="{sub_cls}">📍 {esc(endereco_cli)}</div>' if endereco_cli else ""
     dist_row_html = f'<div style="margin-top:6px;">{dist_badges}</div>' if dist_badges else ""
+    botoes_dir = ""
+    if wa_html or maps_html:
+        botoes_dir = (
+            '<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;">'
+            f'{wa_html}{maps_html}'
+            '</div>'
+        )
 
-    st.markdown(
+    render_html(
         f"""
         <div class="{card_cls}">
             <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:6px;">
                 <span style="font-size:0.88rem;font-weight:700;">{topo_tempo} &nbsp;{status_badge}{serv_badge}</span>
-                <span class="{badge_cls}">{emp_nome}</span>
+                <span class="{badge_cls}">{esc(emp_nome)}</span>
             </div>
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">
                 <div style="flex:1;min-width:210px;">
-                    <div class="{title_cls}">
-                        {ag.get('veiculo', '')} • Placa: {ag.get('placa', '')}
-                    </div>
-                    <div class="{sub_cls}">
-                        👤 {ag.get('cliente_nome', '')} • 📞 {ag.get('cliente_whatsapp') or 'Não informado'}
-                    </div>
+                    <div class="{title_cls}">{esc(ag.get('veiculo', ''))} • Placa: {esc(ag.get('placa', ''))}</div>
+                    <div class="{sub_cls}">👤 {esc(ag.get('cliente_nome', ''))} • 📞 {esc(ag.get('cliente_whatsapp') or 'Não informado')}</div>
                     {end_html}
                     {dist_row_html}
                 </div>
-                <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;">
-                    {wa_html}
-                    {maps_html}
-                </div>
+                {botoes_dir}
             </div>
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
     if not concluida:
         if sem_fin:
             bc1, bc2, bc3 = st.columns([2.2, 2.2, 0.8])
             with bc1:
-                st.markdown('<span class="marker-green"></span>', unsafe_allow_html=True)
+                render_html('<span class="marker-green"></span>')
                 if st.button(
                     "✔ Concluir (Sem Cobrança)",
                     key=f"{prefixo}_conc_rap_{ag['id']}",
@@ -1237,7 +1240,9 @@ def render_editor_os(vistoria: dict, mapa_empresas: dict, nomes_empresas: list, 
                 format="%.2f",
             )
         with c6:
-            todas_op_serv = opcoes_serv + [o for o in (TIPOS_VISTORIA_OPCOES + TIPOS_RASTREAMENTO_OPCOES) if o not in opcoes_serv]
+            todas_op_serv = opcoes_serv + [
+                o for o in (TIPOS_VISTORIA_OPCOES + TIPOS_RASTREAMENTO_OPCOES) if o not in opcoes_serv
+            ]
             serv_atual = extrair_servico_os(vistoria.get("tipo_vistoria"), cat_emp)
             idx_s_op = todas_op_serv.index(serv_atual) if serv_atual in todas_op_serv else 0
             e_serv = st.selectbox("Tipo de Serviço", todas_op_serv, index=idx_s_op)
@@ -1464,7 +1469,7 @@ def tela_login():
     with t2:
         botao_alternar_tema("login")
 
-    st.markdown(
+    render_html(
         """
         <div class="login-box">
             <div class="login-icon">🚗</div>
@@ -1472,8 +1477,7 @@ def tela_login():
             <div class="login-sub-title">Acesso / Login</div>
             <div class="login-sub">Entre com as suas credenciais para continuar</div>
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
     col_esq, col_centro, col_dir = st.columns([0.1, 0.8, 0.1])
@@ -1495,10 +1499,9 @@ def tela_login():
                 else:
                     st.error("Usuário ou senha inválidos. Verifique e tente novamente.")
 
-        st.markdown(
+        render_html(
             "<p style='text-align:center;color:var(--muted);font-size:0.8rem;margin-top:16px;'>"
-            "Vistorias Pro • AD Vistoria</p>",
-            unsafe_allow_html=True,
+            "Vistorias Pro • AD Vistoria</p>"
         )
 
 
@@ -1541,22 +1544,20 @@ def tela_perfil():
             except Exception as e:
                 st.error(f"Erro ao salvar perfil: {e}")
 
-    # Validação automática do Ponto Base no mapa
     base_atual = (perfil.get("ponto_base") or "").strip()
     if base_atual:
         coord = geocodificar_endereco(base_atual)
         if coord:
-            st.markdown(
+            render_html(
                 f"""
                 <div class="cv-card-green">
                     <div class="cv-card-green-title">✅ Ponto Base localizado no mapa</div>
                     <div class="cv-card-green-sub">
-                        📍 {base_atual}<br>
+                        📍 {esc(base_atual)}<br>
                         A Agenda já está calculando a distância em km a partir deste endereço.
                     </div>
                 </div>
-                """,
-                unsafe_allow_html=True,
+                """
             )
         else:
             st.warning(
@@ -1584,7 +1585,6 @@ def tela_agenda():
     amanha = hoje + timedelta(days=1)
     ver = st.session_state.form_ag_ver
 
-    # Quadrinho recolhido Novo Agendamento (com tipo de serviço dinâmico por empresa)
     with st.expander("➕ Novo Agendamento", expanded=False):
         if nomes_empresas:
             empresa_sel = st.selectbox("Empresa", nomes_empresas, key=f"ag_emp_{ver}")
@@ -1663,11 +1663,8 @@ def tela_agenda():
                     )
                     st.rerun()
                 except Exception as e:
-                    st.error(
-                        f"Erro ao salvar agendamento (verifique se rodou o SQL do Passo 1): {e}"
-                    )
+                    st.error(f"Erro ao salvar agendamento: {e}")
 
-    # Filtros: Hoje, Amanhã, Esta Semana
     inicio_semana = hoje - timedelta(days=hoje.weekday())
     fim_semana = inicio_semana + timedelta(days=6)
 
@@ -1685,7 +1682,6 @@ def tela_agenda():
                 st.session_state.agenda_data_busca = None
                 st.rerun()
 
-    # Pesquisa direta no calendário
     with st.container(border=True):
         pc1, pc2 = st.columns([2.4, 1.2])
         with pc1:
@@ -1697,7 +1693,7 @@ def tela_agenda():
                 key="cal_pesquisa_agenda",
             )
         with pc2:
-            st.markdown("<div style='height:27px;'></div>", unsafe_allow_html=True)
+            render_html("<div style='height:27px;'></div>")
             if st.button("🔍 Ver Data", key="btn_ver_data_cal", type="primary", use_container_width=True):
                 st.session_state.agenda_filtro = "Data"
                 st.session_state.agenda_data_busca = data_pesquisa
@@ -1705,7 +1701,6 @@ def tela_agenda():
 
     todos_agendamentos = carregar_agendamentos(apenas_agendadas=False)
 
-    # VISÃO SEMANAL
     if st.session_state.agenda_filtro == "Esta Semana":
         semana_ags = [
             ag
@@ -1756,7 +1751,6 @@ def tela_agenda():
                 )
         return
 
-    # VISÃO DIÁRIA COMPLETA (Hoje, Amanhã ou Data escolhida)
     if st.session_state.agenda_filtro == "Hoje":
         data_ref = hoje
     elif st.session_state.agenda_filtro == "Amanhã":
@@ -1768,7 +1762,6 @@ def tela_agenda():
         ag for ag in todos_agendamentos if str(ag.get("data_agendamento", ""))[:10] == data_ref.isoformat()
     ]
 
-    # Cálculo de distância do Ponto Base para os atendimentos do dia
     distancias_dia = {}
     if ponto_base and ags_do_dia:
         for ag in ags_do_dia:
@@ -1778,7 +1771,6 @@ def tela_agenda():
                 if info:
                     distancias_dia[ag["id"]] = info
 
-    # Identifica o atendimento pendente mais próximo do Ponto Base
     pendentes_com_dist = [
         (ag, distancias_dia[ag["id"]])
         for ag in ags_do_dia
@@ -1789,12 +1781,12 @@ def tela_agenda():
 
     horarios_preenchidos = sorted(x.get("hora_agendamento", "") for x in ags_do_dia)
     resumo_horarios = (
-        f"Horários preenchidos: <strong>{', '.join(horarios_preenchidos)}</strong>"
+        f"Horários preenchidos: <strong>{esc(', '.join(horarios_preenchidos))}</strong>"
         if horarios_preenchidos
         else "Nenhum horário preenchido ainda — todos os horários estão livres."
     )
 
-    st.markdown(
+    render_html(
         f"""
         <div class="cv-day-summary">
             <div style="font-size:1.05rem;font-weight:800;">
@@ -1804,11 +1796,9 @@ def tela_agenda():
                 {len(ags_do_dia)} agendamento(s) no dia • {resumo_horarios}
             </div>
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
-    # Quadro inteligente de Proximidade do Ponto Base
     if pendentes_com_dist:
         linhas_rota = []
         for idx, (ag_r, d_r) in enumerate(pendentes_com_dist, start=1):
@@ -1817,25 +1807,23 @@ def tela_agenda():
             linhas_rota.append(
                 f'<div class="cv-route-item">'
                 f'{tag}<strong>{fmt_km(d_r["km"])} do ponto base</strong>{min_txt} • '
-                f'⏰ {ag_r.get("hora_agendamento", "")} • {ag_r.get("veiculo", "")} ({ag_r.get("cliente_nome", "")}) '
-                f'<span style="color:var(--muted);">— {ag_r.get("endereco", "")}</span>'
+                f'⏰ {esc(ag_r.get("hora_agendamento", ""))} • {esc(ag_r.get("veiculo", ""))} ({esc(ag_r.get("cliente_nome", ""))}) '
+                f'<span style="color:var(--muted);">— {esc(ag_r.get("endereco", ""))}</span>'
                 f'</div>'
             )
-        st.markdown(
+        render_html(
             f"""
             <div class="cv-route-box">
                 <div style="font-weight:800;font-size:0.96rem;margin-bottom:6px;color:var(--text);">
-                    🧭 Proximidade do Ponto Base ({ponto_base})
+                    🧭 Proximidade do Ponto Base ({esc(ponto_base)})
                 </div>
                 {''.join(linhas_rota)}
             </div>
-            """,
-            unsafe_allow_html=True,
+            """
         )
     elif ags_do_dia and not ponto_base:
         st.info("💡 Cadastre seu **Ponto Base** em **👤 Perfil** (no topo) para ver a distância em km de cada cliente.")
 
-    # Grade completa de horários do dia (07:00 às 19:00)
     por_hora = {}
     for ag in ags_do_dia:
         h = extrair_hora_int(ag.get("hora_agendamento"))
@@ -1858,14 +1846,13 @@ def tela_agenda():
                     mostrar_data=False,
                 )
         else:
-            st.markdown(
+            render_html(
                 f"""
                 <div class="cv-slot-free">
                     <span>🕒 {h:02d}:00</span>
                     <span class="cv-slot-free-tag">Livre</span>
                 </div>
-                """,
-                unsafe_allow_html=True,
+                """
             )
 
 
@@ -1889,10 +1876,7 @@ def tela_ordem_servico():
     rotulo_exp = "📋 Concluir Ordem de Serviço (importada da Agenda)" if imp else "➕ Nova Ordem de Serviço"
     with st.expander(rotulo_exp, expanded=bool(imp)):
         if imp:
-            st.markdown(
-                '<div class="cv-banner-import">📅 Dados carregados da Agenda</div>',
-                unsafe_allow_html=True,
-            )
+            render_html('<div class="cv-banner-import">📅 Dados carregados da Agenda</div>')
             if st.button("Limpar dados importados (nova OS avulsa)", use_container_width=True):
                 st.session_state.os_importada = None
                 st.session_state.form_os_ver += 1
@@ -2019,12 +2003,9 @@ def tela_ordem_servico():
             with p1:
                 st.image(foto_arquivo, width=150)
             with p2:
-                st.markdown(
-                    '<span class="cv-badge-purple">✔ 1 foto anexada</span>',
-                    unsafe_allow_html=True,
-                )
+                render_html('<span class="cv-badge-purple">✔ 1 foto anexada</span>')
 
-        st.markdown('<span class="marker-red"></span>', unsafe_allow_html=True)
+        render_html('<span class="marker-red"></span>')
         concluir = st.button(
             "✔ Concluir Ordem de Serviço",
             key=f"btn_concluir_os_{ver}",
@@ -2083,8 +2064,7 @@ def tela_ordem_servico():
                 except Exception as e:
                     st.error(f"Erro ao concluir Ordem de Serviço: {e}")
 
-    # Sub-abas: OS do Dia / Próximas OS / Histórico de OS
-    st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+    render_html("<div style='height:6px;'></div>")
     s1, s2, s3 = st.columns(3)
     for col, nome_sub in [
         (s1, "OS do Dia"),
@@ -2176,25 +2156,22 @@ def _render_card_os_concluida(v: dict, mapa_empresas: dict, nomes_empresas: list
         badge = "cv-badge-purple"
 
     valor_str = "Sem cobrança" if st_pg == "Sem Cobrança" else fmt_moeda(v.get("valor", 0))
-    end_txt = f"<div class='cv-card-sub'>📍 {v['endereco']}</div>" if v.get("endereco") else ""
+    end_txt = f"<div class='cv-card-sub'>📍 {esc(v['endereco'])}</div>" if v.get("endereco") else ""
 
-    st.markdown(
+    render_html(
         f"""
         <div class="cv-card">
             <div style="display:flex;justify-content:space-between;align-items:center;">
-                <span class="cv-card-title">
-                    OS #{v['id']} • {v['veiculo']} ({v['placa']})
-                </span>
-                <span class="{badge}">{st_pg}</span>
+                <span class="cv-card-title">OS #{v['id']} • {esc(v['veiculo'])} ({esc(v['placa'])})</span>
+                <span class="{badge}">{esc(st_pg)}</span>
             </div>
             <div class="cv-card-sub">
-                🏢 {v['empresa_nome']} • 📅 {fmt_data_br(v['data_vistoria'])} • 🔧 {v.get('tipo_vistoria', 'Cautelar')} •
+                🏢 {esc(v['empresa_nome'])} • 📅 {fmt_data_br(v['data_vistoria'])} • 🔧 {esc(v.get('tipo_vistoria', 'Cautelar'))} •
                 <strong style="color:var(--text);">{valor_str}</strong>
             </div>
             {end_txt}
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
     with st.expander(f"Ver foto / Corrigir / Excluir — OS #{v['id']}"):
         if v.get("cliente_nome"):
@@ -2296,9 +2273,7 @@ def tela_empresas():
                     st.session_state.aviso_sucesso = f"Empresa '{nome.strip()}' cadastrada com sucesso!"
                     st.rerun()
                 except Exception as e:
-                    st.error(
-                        f"Erro ao salvar empresa (confirme se rodou o SQL do Passo 1 no Supabase): {e}"
-                    )
+                    st.error(f"Erro ao salvar empresa: {e}")
 
     empresas = carregar_empresas()
     st.markdown(f"#### Empresas Cadastradas ({len(empresas)})")
@@ -2328,25 +2303,22 @@ def tela_empresas():
             else f"Paga dia {int(emp.get('dia_pagamento') or 15):02d} • Padrão: {fmt_moeda(emp.get('valor_padrao', 0))}"
         )
 
-        st.markdown(
+        render_html(
             f"""
             <div class="cv-card">
                 <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
                     <div>
                         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                            <span class="cv-card-title">🏢 {emp['nome']}</span>
+                            <span class="cv-card-title">🏢 {esc(emp['nome'])}</span>
                             {cat_badge}
-                            <span class="cv-badge-amber">{tipos_label}</span>
+                            <span class="cv-badge-amber">{esc(tipos_label)}</span>
                         </div>
-                        <div class="cv-card-sub">
-                            Resp.: {emp.get('responsavel') or '-'} • {fin_txt}
-                        </div>
+                        <div class="cv-card-sub">Resp.: {esc(emp.get('responsavel') or '-')} • {fin_txt}</div>
                     </div>
                     <div>{wa_html}</div>
                 </div>
             </div>
-            """,
-            unsafe_allow_html=True,
+            """
         )
         with st.expander(f"Detalhar / Editar / Excluir — {emp['nome']}"):
             e_nome = st.text_input("Nome da Empresa", value=emp["nome"], key=f"ee_nome_{emp['id']}_{ver}")
@@ -2443,7 +2415,7 @@ def tela_financeiro():
             st.rerun()
     with nav2:
         titulo_mes = f"{MESES_PT[st.session_state.fin_mes]} {st.session_state.fin_ano}"
-        st.markdown(f'<div class="cv-month-bar">📅 {titulo_mes}</div>', unsafe_allow_html=True)
+        render_html(f'<div class="cv-month-bar">📅 {titulo_mes}</div>')
     with nav3:
         if st.button("▶", key="mes_prox", use_container_width=True):
             if st.session_state.fin_mes == 12:
@@ -2454,7 +2426,6 @@ def tela_financeiro():
             st.rerun()
 
     todas_mes = carregar_vistorias(st.session_state.fin_ano, st.session_state.fin_mes)
-    # Filtra apenas registros financeiros (ignora Rastreamento / Sem Cobrança)
     vistorias = [v for v in todas_mes if v.get("status_pagamento") != "Sem Cobrança"]
 
     empresas = carregar_empresas()
@@ -2468,21 +2439,18 @@ def tela_financeiro():
     total_pendente = sum(float(v.get("valor") or 0) for v in pendentes)
     total_recebido = sum(float(v.get("valor") or 0) for v in recebidas)
 
-    st.markdown(
+    render_html(
         f"""
         <div class="cv-hero-purple">
             <div class="cv-hero-label">💼 Total Líquido a Receber</div>
             <div class="cv-hero-value">{fmt_moeda(total_pendente)}</div>
-            <div class="cv-hero-sub">
-                {len(vistorias)} Vistorias Faturáveis • {len(pendentes)} OS Pendentes
-            </div>
+            <div class="cv-hero-sub">{len(vistorias)} Vistorias Faturáveis • {len(pendentes)} OS Pendentes</div>
             <div class="cv-pill-row">
                 <span class="cv-pill-light">Pendente: {fmt_moeda(total_pendente)}</span>
                 <span class="cv-pill-green">✓ Já Recebido: {fmt_moeda(total_recebido)}</span>
             </div>
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
     if PDF_DISPONIVEL and vistorias:
@@ -2510,27 +2478,24 @@ def tela_financeiro():
             dia_p = dias_pgto.get(emp_nome, 15)
             badge_cls = "cv-badge-purple" if dia_p == 15 else "cv-badge-red"
 
-            st.markdown(
+            render_html(
                 f"""
                 <div class="cv-card">
                     <div style="display:flex;justify-content:space-between;align-items:center;">
-                        <div class="cv-card-title">🏢 {emp_nome}</div>
+                        <div class="cv-card-title">🏢 {esc(emp_nome)}</div>
                         <span class="{badge_cls}">Paga dia {dia_p:02d}</span>
                     </div>
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
-                        <span class="cv-card-sub">
-                            {qtd} vistoria(s) concluída(s) • {fmt_moeda(media)} por OS
-                        </span>
+                        <span class="cv-card-sub">{qtd} vistoria(s) concluída(s) • {fmt_moeda(media)} por OS</span>
                         <span style="font-weight:800;font-size:1.08rem;color:var(--text);">{fmt_moeda(soma)}</span>
                     </div>
                 </div>
-                """,
-                unsafe_allow_html=True,
+                """
             )
 
             col_baixa, col_pdf = st.columns([3.3, 1])
             with col_baixa:
-                st.markdown('<span class="marker-green"></span>', unsafe_allow_html=True)
+                render_html('<span class="marker-green"></span>')
                 if st.button(
                     "✓ Marcar como Recebido",
                     key=f"baixar_{emp_nome}_{st.session_state.fin_ano}_{st.session_state.fin_mes}",
@@ -2577,25 +2542,22 @@ def tela_financeiro():
             datas_rec = [x.get("data_recebimento") for x in lista_os if x.get("data_recebimento")]
             dt_label = fmt_data_curta(max(datas_rec)) if datas_rec else "-"
 
-            st.markdown(
+            render_html(
                 f"""
                 <div class="cv-card-green">
                     <div style="display:flex;justify-content:space-between;align-items:center;">
-                        <div class="cv-card-green-title">🏢 {emp_nome}</div>
+                        <div class="cv-card-green-title">🏢 {esc(emp_nome)}</div>
                         <span class="cv-badge-green">✓ Recebido em {dt_label}</span>
                     </div>
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
-                        <span class="cv-card-green-sub">
-                            {qtd} vistoria(s) • {fmt_moeda(media)} por OS
-                        </span>
+                        <span class="cv-card-green-sub">{qtd} vistoria(s) • {fmt_moeda(media)} por OS</span>
                         <span class="cv-card-green-title">✓ {fmt_moeda(soma)}</span>
                     </div>
                     <div style="margin-top:8px;">
                         <span class="cv-badge-green">Baixa efetuada com sucesso</span>
                     </div>
                 </div>
-                """,
-                unsafe_allow_html=True,
+                """
             )
             if st.button(
                 f"Desfazer baixa de {emp_nome}",
@@ -2669,25 +2631,22 @@ def tela_pdf():
             badge = "cv-badge-purple"
 
         val_str = "Sem cobrança" if st_pg == "Sem Cobrança" else fmt_moeda(v.get("valor", 0))
-        end_txt = f"<div class='cv-card-sub'>📍 {v['endereco']}</div>" if v.get("endereco") else ""
+        end_txt = f"<div class='cv-card-sub'>📍 {esc(v['endereco'])}</div>" if v.get("endereco") else ""
 
-        st.markdown(
+        render_html(
             f"""
             <div class="cv-card">
                 <div style="display:flex;justify-content:space-between;align-items:center;">
-                    <span class="cv-card-title">
-                        OS #{v['id']} • {v['veiculo']} ({v['placa']})
-                    </span>
-                    <span class="{badge}">{st_pg}</span>
+                    <span class="cv-card-title">OS #{v['id']} • {esc(v['veiculo'])} ({esc(v['placa'])})</span>
+                    <span class="{badge}">{esc(st_pg)}</span>
                 </div>
                 <div class="cv-card-sub">
-                    🏢 {v['empresa_nome']} • 📅 {fmt_data_br(v['data_vistoria'])} • 🔧 {v.get('tipo_vistoria', 'Cautelar')} •
+                    🏢 {esc(v['empresa_nome'])} • 📅 {fmt_data_br(v['data_vistoria'])} • 🔧 {esc(v.get('tipo_vistoria', 'Cautelar'))} •
                     <strong style="color:var(--text);">{val_str}</strong>
                 </div>
                 {end_txt}
             </div>
-            """,
-            unsafe_allow_html=True,
+            """
         )
         with st.expander(f"Ver foto / PDF / Corrigir / Excluir — OS #{v['id']}"):
             if v.get("cliente_nome"):
@@ -2722,10 +2681,7 @@ def main():
 
     top1, top2, top3, top4 = st.columns([2.4, 1.0, 1.0, 0.9])
     with top1:
-        st.markdown(
-            '<div class="brand-bar">🚗 Controle de Vistorias</div>',
-            unsafe_allow_html=True,
-        )
+        render_html('<div class="brand-bar">🚗 Controle de Vistorias</div>')
     with top2:
         if st.button(
             "👤 Perfil",
@@ -2743,7 +2699,6 @@ def main():
             st.session_state.os_importada = None
             st.rerun()
 
-    # Ordem: 1. Agenda | 2. Ordem de Serviço | 3. Empresas | 4. Financeiro | 5. PDF
     abas = [
         ("Agenda", "📅 Agenda"),
         ("Ordem de Serviço", "✅ Ordem de Serviço"),
@@ -2759,7 +2714,7 @@ def main():
                 st.session_state.pagina = chave
                 st.rerun()
 
-    st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+    render_html("<div style='height:8px;'></div>")
 
     if st.session_state.pagina == "Perfil":
         tela_perfil()
