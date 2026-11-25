@@ -168,7 +168,6 @@ def sincronizar_sessao():
         st.session_state.ultimo_acesso = agora
         if st.session_state.get("manter_conectado", True):
             valido, exp_atual = _validar_token_sessao(token_url)
-            # Renova o token a cada ~5 minutos de uso para manter sempre 1 hora à frente
             if (not valido) or (exp_atual - agora < SESSAO_TIMEOUT_SEGUNDOS - 300):
                 _definir_token_url(_criar_token_sessao())
     else:
@@ -232,7 +231,7 @@ if "pdfs_prontos" not in st.session_state:
 
 
 # =========================================================
-# TEMA DINÂMICO (MODO CLARO E MODO ESCURO)
+# TEMA DINÂMICO (MODO CLARO E MODO ESCURO) + BARRA INFERIOR
 # =========================================================
 def aplicar_tema(modo: str):
     if modo == "escuro":
@@ -269,7 +268,11 @@ def aplicar_tema(modo: str):
             "sec_btn_bg": "#222634",
             "sec_btn_text": "#E5E7EB",
             "sec_btn_border": "#363C52",
+            "nav_active_line": "#C084FC",
+            "dot_bg": "#E9D5FF",
+            "dot_border": "#E9D5FF",
             "shadow": "0 4px 14px rgba(0, 0, 0, 0.35)",
+            "nav_shadow": "0 -4px 20px rgba(0, 0, 0, 0.45)",
         }
     else:
         cores = {
@@ -305,7 +308,11 @@ def aplicar_tema(modo: str):
             "sec_btn_bg": "#FFFFFF",
             "sec_btn_text": "#374151",
             "sec_btn_border": "#D1D5DB",
+            "nav_active_line": "#4E1A6B",
+            "dot_bg": "#FFFFFF",
+            "dot_border": "#4E1A6B",
             "shadow": "0 2px 10px rgba(17, 24, 39, 0.06)",
+            "nav_shadow": "0 -4px 18px rgba(17, 24, 39, 0.10)",
         }
 
     st.markdown(
@@ -344,7 +351,11 @@ def aplicar_tema(modo: str):
             --sec-btn-bg: {cores['sec_btn_bg']};
             --sec-btn-text: {cores['sec_btn_text']};
             --sec-btn-border: {cores['sec_btn_border']};
+            --nav-active-line: {cores['nav_active_line']};
+            --dot-bg: {cores['dot_bg']};
+            --dot-border: {cores['dot_border']};
             --shadow: {cores['shadow']};
+            --nav-shadow: {cores['nav_shadow']};
         }}
 
         .stApp, [data-testid="stAppViewContainer"] {{
@@ -353,12 +364,12 @@ def aplicar_tema(modo: str):
         }}
         [data-testid="stHeader"] {{
             background-color: transparent !important;
-            height: 2.8rem !important;
+            height: 2.6rem !important;
         }}
         .block-container {{
-            max-width: 920px !important;
-            padding-top: 4.2rem !important;
-            padding-bottom: 3rem !important;
+            max-width: 900px !important;
+            padding-top: 3.6rem !important;
+            padding-bottom: 6.5rem !important;
         }}
 
         h1, h2, h3, h4, h5, h6,
@@ -414,6 +425,206 @@ def aplicar_tema(modo: str):
             font-weight: 700;
         }}
 
+        /* Oculta marcadores técnicos sem ocupar altura */
+        div[data-testid="stElementContainer"]:has(.marker-hidden),
+        div.element-container:has(.marker-hidden) {{
+            display: none !important;
+        }}
+
+        /* =====================================================
+           TOPO FIXO EM LINHA ÚNICA (MARCA + BOLINHA + SAIR)
+           ===================================================== */
+        div[data-testid="stHorizontalBlock"]:has(.cv-top-bar-marker) {{
+            display: flex !important;
+            flex-direction: row !important;
+            flex-wrap: nowrap !important;
+            align-items: center !important;
+            justify-content: space-between !important;
+            gap: 8px !important;
+            margin-bottom: 4px !important;
+            padding-bottom: 8px !important;
+            border-bottom: 1px solid var(--border) !important;
+        }}
+        div[data-testid="stHorizontalBlock"]:has(.cv-top-bar-marker) > div[data-testid="stColumn"],
+        div[data-testid="stHorizontalBlock"]:has(.cv-top-bar-marker) > div[data-testid="column"] {{
+            min-width: 0 !important;
+            width: auto !important;
+            display: flex !important;
+            align-items: center !important;
+        }}
+        div[data-testid="stHorizontalBlock"]:has(.cv-top-bar-marker) > div[data-testid="stColumn"]:nth-child(1),
+        div[data-testid="stHorizontalBlock"]:has(.cv-top-bar-marker) > div[data-testid="column"]:nth-child(1) {{
+            flex: 1 1 auto !important;
+        }}
+        div[data-testid="stHorizontalBlock"]:has(.cv-top-bar-marker) > div[data-testid="stColumn"]:nth-child(2),
+        div[data-testid="stHorizontalBlock"]:has(.cv-top-bar-marker) > div[data-testid="column"]:nth-child(2) {{
+            flex: 0 0 38px !important;
+            justify-content: center !important;
+        }}
+        div[data-testid="stHorizontalBlock"]:has(.cv-top-bar-marker) > div[data-testid="stColumn"]:nth-child(3),
+        div[data-testid="stHorizontalBlock"]:has(.cv-top-bar-marker) > div[data-testid="column"]:nth-child(3) {{
+            flex: 0 0 auto !important;
+        }}
+
+        /* Linha do topo na tela de Login (bolinha à direita) */
+        div[data-testid="stHorizontalBlock"]:has(.cv-login-top-marker) {{
+            display: flex !important;
+            flex-direction: row !important;
+            flex-wrap: nowrap !important;
+            align-items: center !important;
+            justify-content: flex-end !important;
+        }}
+        div[data-testid="stHorizontalBlock"]:has(.cv-login-top-marker) > div[data-testid="stColumn"]:nth-child(1),
+        div[data-testid="stHorizontalBlock"]:has(.cv-login-top-marker) > div[data-testid="column"]:nth-child(1) {{
+            flex: 1 1 auto !important;
+        }}
+        div[data-testid="stHorizontalBlock"]:has(.cv-login-top-marker) > div[data-testid="stColumn"]:nth-child(2),
+        div[data-testid="stHorizontalBlock"]:has(.cv-login-top-marker) > div[data-testid="column"]:nth-child(2) {{
+            flex: 0 0 38px !important;
+        }}
+
+        /* Botão BOLINHA Claro (vazia) / Escuro (preenchida) */
+        div[data-testid="stElementContainer"]:has(.marker-theme-dot) + div[data-testid="stElementContainer"] button,
+        div.element-container:has(.marker-theme-dot) + div.element-container button {{
+            width: 28px !important;
+            height: 28px !important;
+            min-width: 28px !important;
+            min-height: 28px !important;
+            padding: 0 !important;
+            margin: 0 auto !important;
+            border-radius: 50% !important;
+            background-color: var(--dot-bg) !important;
+            border: 2.5px solid var(--dot-border) !important;
+            box-shadow: var(--shadow) !important;
+        }}
+        div[data-testid="stElementContainer"]:has(.marker-theme-dot) + div[data-testid="stElementContainer"] button p,
+        div.element-container:has(.marker-theme-dot) + div.element-container button p {{
+            font-size: 1px !important;
+            color: transparent !important;
+            margin: 0 !important;
+        }}
+
+        /* =====================================================
+           BARRA DE NAVEGAÇÃO INFERIOR ESTILO APP (MOBILE + PC)
+           ===================================================== */
+        div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) {{
+            position: fixed !important;
+            bottom: 0 !important;
+            left: 50% !important;
+            transform: translateX(-50%) !important;
+            width: 100% !important;
+            max-width: 780px !important;
+            z-index: 9999 !important;
+            background-color: var(--surface) !important;
+            border-top: 1px solid var(--border) !important;
+            border-left: 1px solid var(--border) !important;
+            border-right: 1px solid var(--border) !important;
+            border-radius: 18px 18px 0 0 !important;
+            box-shadow: var(--nav-shadow) !important;
+            padding: 6px 6px calc(8px + env(safe-area-inset-bottom)) 6px !important;
+            margin: 0 !important;
+            display: flex !important;
+            flex-direction: row !important;
+            flex-wrap: nowrap !important;
+            align-items: stretch !important;
+            justify-content: space-between !important;
+            gap: 2px !important;
+        }}
+
+        div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) > div[data-testid="stColumn"],
+        div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) > div[data-testid="column"] {{
+            flex: 1 1 0% !important;
+            min-width: 0 !important;
+            width: auto !important;
+            padding: 0 !important;
+        }}
+
+        div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) button {{
+            border-radius: 12px !important;
+            padding: 5px 2px !important;
+            min-height: 52px !important;
+            height: 100% !important;
+            box-shadow: none !important;
+        }}
+
+        div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) button[kind="secondary"],
+        div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) button[data-testid="stBaseButton-secondary"] {{
+            background-color: transparent !important;
+            border: none !important;
+            border-bottom: 3px solid transparent !important;
+            color: var(--muted) !important;
+        }}
+        div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) button[kind="secondary"] p,
+        div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) button[data-testid="stBaseButton-secondary"] p {{
+            color: var(--muted) !important;
+            font-size: 0.70rem !important;
+            font-weight: 600 !important;
+            line-height: 1.15 !important;
+            white-space: normal !important;
+            text-align: center !important;
+            margin: 0 !important;
+        }}
+
+        div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) button[kind="primary"],
+        div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) button[data-testid="stBaseButton-primary"] {{
+            background-color: var(--purple-soft-bg) !important;
+            border: none !important;
+            border-bottom: 3px solid var(--nav-active-line) !important;
+            color: var(--purple-soft-text) !important;
+        }}
+        div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) button[kind="primary"] p,
+        div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) button[data-testid="stBaseButton-primary"] p {{
+            color: var(--purple-soft-text) !important;
+            font-size: 0.70rem !important;
+            font-weight: 800 !important;
+            line-height: 1.15 !important;
+            white-space: normal !important;
+            text-align: center !important;
+            margin: 0 !important;
+        }}
+
+        /* Ícone maior na linha superior de cada aba */
+        div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) button p::first-line {{
+            font-size: 1.22rem !important;
+            line-height: 1.32 !important;
+        }}
+
+        /* Ajustes para tela de celular */
+        @media (max-width: 640px) {{
+            .block-container {{
+                padding-top: 3.1rem !important;
+                padding-left: 0.75rem !important;
+                padding-right: 0.75rem !important;
+                padding-bottom: 6.5rem !important;
+            }}
+            .brand-bar {{
+                font-size: 1.04rem !important;
+            }}
+            div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) {{
+                max-width: 100% !important;
+                border-left: none !important;
+                border-right: none !important;
+                border-radius: 16px 16px 0 0 !important;
+                padding: 5px 3px calc(8px + env(safe-area-inset-bottom)) 3px !important;
+            }}
+            div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) button {{
+                min-height: 50px !important;
+                padding: 4px 1px !important;
+            }}
+            div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) button[kind="secondary"] p,
+            div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) button[data-testid="stBaseButton-secondary"] p,
+            div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) button[kind="primary"] p,
+            div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) button[data-testid="stBaseButton-primary"] p {{
+                font-size: 0.58rem !important;
+            }}
+            div[data-testid="stHorizontalBlock"]:has(.cv-bottom-nav-marker) button p::first-line {{
+                font-size: 1.12rem !important;
+            }}
+        }}
+
+        /* =====================================================
+           CARDS, BADGES E BOTÕES DO CONTEÚDO
+           ===================================================== */
         .cv-card {{
             background: var(--surface);
             border: 1px solid var(--border);
@@ -835,7 +1046,9 @@ def aplicar_tema(modo: str):
             font-weight: 800;
             font-size: 1.2rem;
             color: var(--purple-soft-text);
-            padding-top: 6px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }}
         </style>
         """,
@@ -1098,7 +1311,6 @@ def _buscar_nominatim(query: str):
 
 
 def geocodificar_endereco(endereco: str, bias_coord=None, contexto_cidade: str = ""):
-    """Geocodifica com cache persistente em servidor (inclusive cache curto para falhas)."""
     texto = _normalizar_endereco_br(endereco)
     if len(texto) < 3:
         return None
@@ -1139,13 +1351,11 @@ def geocodificar_endereco(endereco: str, bias_coord=None, contexto_cidade: str =
             GEO_STORE["geo"][chave] = (coord, agora + 86400)
             return coord
 
-    # Cacheia falha por 15 minutos para não travar a tela em todo clique
     GEO_STORE["geo"][chave] = (None, agora + 900)
     return None
 
 
 def calcular_distancia_rota(origem_end: str, destino_end: str, c_orig_pre=None):
-    """Retorna dict {'km': float, 'minutos': int, 'estimada': bool} ou None."""
     orig = str(origem_end or "").strip()
     dest = str(destino_end or "").strip()
     if len(orig) < 3 or len(dest) < 3:
@@ -1198,7 +1408,6 @@ def calcular_distancia_rota(origem_end: str, destino_end: str, c_orig_pre=None):
 
 
 def calcular_distancias_em_lote(ponto_base: str, lista_ags: list) -> dict:
-    """Calcula distâncias de todos os agendamentos em paralelo (muito mais rápido)."""
     if not ponto_base or not lista_ags:
         return {}
 
@@ -1276,7 +1485,6 @@ def carregar_agendamentos(apenas_agendadas=True):
 
 @st.cache_data(ttl=60, show_spinner=False)
 def carregar_vistorias(ano=None, mes=None):
-    """Carrega apenas colunas leves (sem baixar fotos base64 na listagem)."""
     try:
         q = supabase.table("vistorias").select(COLUNAS_VISTORIA_LEVE)
         if ano and mes:
@@ -1292,7 +1500,6 @@ def carregar_vistorias(ano=None, mes=None):
 
 @st.cache_data(ttl=600, show_spinner=False)
 def carregar_foto_os(os_id: int):
-    """Baixa a foto somente quando o usuário pede para ver ou gerar PDF individual."""
     try:
         res = supabase.table("vistorias").select("foto_base64").eq("id", os_id).limit(1).execute()
         if res.data:
@@ -1311,7 +1518,6 @@ def limpar_cache_dados():
 
 
 def verificar_conflito_horario(data_iso: str, hora_hhmm: str, ignorar_id=None):
-    """Consulta em tempo real para bloquear horário duplicado (ignora Frustrada)."""
     alvo = normalizar_hora(hora_hhmm)
     try:
         res = (
@@ -1491,7 +1697,7 @@ def render_card_agendamento(
         if sem_fin:
             bc1, bc2, bc3 = st.columns([2.2, 2.2, 0.8])
             with bc1:
-                render_html('<span class="marker-green"></span>')
+                render_html('<span class="marker-green marker-hidden"></span>')
                 if st.button(
                     "✔ Concluir (Sem Cobrança)",
                     key=f"{prefixo}_conc_rap_{ag['id']}",
@@ -1755,7 +1961,7 @@ def render_card_agendamento(
                     height=80,
                     key=f"{prefixo}_frust_obs_{ag['id']}_{ver}",
                 )
-                render_html('<span class="marker-red"></span>')
+                render_html('<span class="marker-red marker-hidden"></span>')
                 if st.button(
                     "❌ Marcar como Frustrada",
                     key=f"{prefixo}_frust_btn_{ag['id']}_{ver}",
@@ -2049,12 +2255,18 @@ def gerar_pdf_lote(vistorias: list, titulo_periodo: str, empresa_filtro: str = "
 
 
 # =========================================================
-# BOTÃO CLARO / ESCURO
+# BOTÃO BOLINHA CLARO (VAZIA) / ESCURO (PREENCHIDA)
 # =========================================================
 def botao_alternar_tema(key_suffix: str = "topo"):
-    label_tema = "🌙 Escuro" if st.session_state.tema == "claro" else "☀️ Claro"
-    if st.button(label_tema, key=f"toggle_tema_{key_suffix}", use_container_width=True):
-        st.session_state.tema = "escuro" if st.session_state.tema == "claro" else "claro"
+    eh_escuro = st.session_state.tema == "escuro"
+    dica = (
+        "Modo Escuro (toque para mudar para Claro)"
+        if eh_escuro
+        else "Modo Claro (toque para mudar para Escuro)"
+    )
+    render_html('<span class="marker-theme-dot marker-hidden"></span>')
+    if st.button("\u00A0", key=f"toggle_tema_{key_suffix}", help=dica):
+        st.session_state.tema = "claro" if eh_escuro else "escuro"
         st.rerun()
 
 
@@ -2062,7 +2274,9 @@ def botao_alternar_tema(key_suffix: str = "topo"):
 # TELA 1: ACESSO / LOGIN
 # =========================================================
 def tela_login():
-    t1, t2 = st.columns([3.5, 1.5])
+    t1, t2 = st.columns([5, 0.7])
+    with t1:
+        render_html('<span class="cv-login-top-marker marker-hidden"></span>')
     with t2:
         botao_alternar_tema("login")
 
@@ -2077,7 +2291,7 @@ def tela_login():
         """
     )
 
-    col_esq, col_centro, col_dir = st.columns([0.1, 0.8, 0.1])
+    col_esq, col_centro, col_dir = st.columns([0.08, 0.84, 0.08])
     with col_centro:
         if st.session_state.get("aviso_expirado"):
             st.info("⏱️ Sua sessão expirou após 1 hora de inatividade. Entre novamente.")
@@ -2179,7 +2393,7 @@ def tela_perfil():
 
 
 # =========================================================
-# TELA 2: AGENDA DE VISTORIAS (RÁPIDA + PARALELA + ATRASOS)
+# TELA 2: AGENDA DE VISTORIAS
 # =========================================================
 def tela_agenda():
     st.markdown("### 📅 Agenda de Vistorias")
@@ -2516,7 +2730,7 @@ def tela_agenda():
                 """
             )
     elif ags_do_dia and not ponto_base:
-        st.info("💡 Cadastre seu **Ponto Base** em **👤 Perfil** (no topo) para ver a distância em km e minutos de cada cliente.")
+        st.info("💡 Cadastre seu **Ponto Base** na aba **👤 Perfil** para ver a distância em km e minutos de cada cliente.")
 
     por_hora = {}
     for ag in ags_do_dia:
@@ -2699,7 +2913,7 @@ def tela_ordem_servico():
             with p2:
                 render_html('<span class="cv-badge-purple">✔ 1 foto anexada</span>')
 
-        render_html('<span class="marker-red"></span>')
+        render_html('<span class="marker-red marker-hidden"></span>')
         concluir = st.button(
             "✔ Concluir Ordem de Serviço",
             key=f"btn_concluir_os_{ver}",
@@ -3234,7 +3448,7 @@ def tela_financeiro():
 
             col_baixa, col_pdf = st.columns([3.3, 1])
             with col_baixa:
-                render_html('<span class="marker-green"></span>')
+                render_html('<span class="marker-green marker-hidden"></span>')
                 if st.button(
                     "✓ Marcar como Recebido",
                     key=f"baixar_{emp_nome}_{st.session_state.fin_ano}_{st.session_state.fin_mes}",
@@ -3434,8 +3648,28 @@ def tela_pdf():
 
 
 # =========================================================
-# BARRA SUPERIOR E NAVEGAÇÃO PRINCIPAL
+# BARRA SUPERIOR (BOLINHA TEMA + SAIR) E BARRA INFERIOR FIXA
 # =========================================================
+def render_barra_inferior():
+    abas = [
+        ("Agenda", "📅  \nAgenda"),
+        ("Ordem de Serviço", "✅  \nOrdem de Serviço"),
+        ("Empresas", "🤝  \nEmpresas"),
+        ("Financeiro", "💰  \nFinanceiro"),
+        ("PDF", "📄  \nPDF"),
+        ("Perfil", "👤  \nPerfil"),
+    ]
+    cols_nav = st.columns(len(abas))
+    for idx, (col, (chave, rotulo)) in enumerate(zip(cols_nav, abas)):
+        with col:
+            if idx == 0:
+                render_html('<span class="cv-bottom-nav-marker marker-hidden"></span>')
+            tipo = "primary" if st.session_state.pagina == chave else "secondary"
+            if st.button(rotulo, key=f"nav_{chave}", type=tipo, use_container_width=True):
+                st.session_state.pagina = chave
+                st.rerun()
+
+
 def main():
     sincronizar_sessao()
 
@@ -3443,47 +3677,21 @@ def main():
         tela_login()
         return
 
-    top1, top2, top3, top4 = st.columns([2.4, 1.0, 1.0, 0.9])
+    # Barra superior limpa: Marca | Bolinha Claro/Escuro | Sair
+    top1, top2, top3 = st.columns([3.8, 0.55, 0.95])
     with top1:
-        render_html('<div class="brand-bar">🚗 Controle de Vistorias</div>')
+        render_html('<div class="brand-bar cv-top-bar-marker">🚗 Controle de Vistorias</div>')
     with top2:
-        if st.button(
-            "👤 Perfil",
-            key="nav_perfil",
-            type="primary" if st.session_state.pagina == "Perfil" else "secondary",
-            use_container_width=True,
-        ):
-            st.session_state.pagina = "Perfil"
-            st.rerun()
-    with top3:
         botao_alternar_tema("app")
-    with top4:
-        if st.button("🚪 Sair", use_container_width=True):
+    with top3:
+        if st.button("🚪 Sair", key="btn_sair_app", use_container_width=True):
             st.session_state.autenticado = False
             st.session_state.os_importada = None
             _limpar_token_url()
             st.rerun()
 
-    abas = [
-        ("Agenda", "📅 Agenda"),
-        ("Ordem de Serviço", "✅ Ordem de Serviço"),
-        ("Empresas", "🤝 Empresas"),
-        ("Financeiro", "💰 Financeiro"),
-        ("PDF", "📄 PDF"),
-    ]
-    cols_nav = st.columns([1.0, 1.85, 1.15, 1.25, 0.85])
-    for col, (chave, rotulo) in zip(cols_nav, abas):
-        with col:
-            tipo = "primary" if st.session_state.pagina == chave else "secondary"
-            if st.button(rotulo, key=f"nav_{chave}", type=tipo, use_container_width=True):
-                st.session_state.pagina = chave
-                st.rerun()
-
-    render_html("<div style='height:8px;'></div>")
-
-    if st.session_state.pagina == "Perfil":
-        tela_perfil()
-    elif st.session_state.pagina == "Agenda":
+    # Conteúdo da tela selecionada
+    if st.session_state.pagina == "Agenda":
         tela_agenda()
     elif st.session_state.pagina == "Ordem de Serviço":
         tela_ordem_servico()
@@ -3493,6 +3701,11 @@ def main():
         tela_financeiro()
     elif st.session_state.pagina == "PDF":
         tela_pdf()
+    elif st.session_state.pagina == "Perfil":
+        tela_perfil()
+
+    # Barra fixa inferior estilo aplicativo (Agenda, Ordem de Serviço, Empresas, Financeiro, PDF, Perfil)
+    render_barra_inferior()
 
 
 if __name__ == "__main__":
