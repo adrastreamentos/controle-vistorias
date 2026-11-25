@@ -147,6 +147,10 @@ def aplicar_tema(modo: str):
             "red_hover": "#A50D26",
             "red_soft_bg": "#3A1820",
             "red_soft_text": "#FCA5A5",
+            "late_card_bg": "#3B1219",
+            "late_card_border": "#EF4444",
+            "late_card_text": "#FEE2E2",
+            "late_card_sub": "#FCA5A5",
             "green": "#22B85E",
             "green_hover": "#199A4C",
             "green_card_bg": "#10281E",
@@ -179,6 +183,10 @@ def aplicar_tema(modo: str):
             "red_hover": "#A10E27",
             "red_soft_bg": "#FDE8EC",
             "red_soft_text": "#B91C1C",
+            "late_card_bg": "#FEE2E2",
+            "late_card_border": "#DC2626",
+            "late_card_text": "#7F1D1D",
+            "late_card_sub": "#991B1B",
             "green": "#28B85B",
             "green_hover": "#1E9B4B",
             "green_card_bg": "#EAF8EF",
@@ -214,6 +222,10 @@ def aplicar_tema(modo: str):
             --red-hover: {cores['red_hover']};
             --red-soft-bg: {cores['red_soft_bg']};
             --red-soft-text: {cores['red_soft_text']};
+            --late-card-bg: {cores['late_card_bg']};
+            --late-card-border: {cores['late_card_border']};
+            --late-card-text: {cores['late_card_text']};
+            --late-card-sub: {cores['late_card_sub']};
             --green: {cores['green']};
             --green-hover: {cores['green_hover']};
             --green-card-bg: {cores['green_card_bg']};
@@ -272,7 +284,8 @@ def aplicar_tema(modo: str):
         [data-baseweb="input"],
         [data-baseweb="base-input"],
         [data-baseweb="select"] > div,
-        [data-testid="stFileUploader"] section {{
+        [data-testid="stFileUploader"] section,
+        textarea {{
             background-color: var(--input-bg) !important;
             border-color: var(--border) !important;
             border-radius: 10px !important;
@@ -320,6 +333,35 @@ def aplicar_tema(modo: str):
             padding: 14px 16px;
             margin-bottom: 8px;
             box-shadow: var(--shadow);
+        }}
+        .cv-card-late {{
+            background: var(--late-card-bg);
+            border: 2px solid var(--late-card-border);
+            border-left: 6px solid var(--red);
+            border-radius: 14px;
+            padding: 14px 16px;
+            margin-bottom: 8px;
+            box-shadow: var(--shadow);
+        }}
+        .cv-card-late-title {{
+            font-weight: 800;
+            font-size: 1.02rem;
+            color: var(--late-card-text);
+        }}
+        .cv-card-late-sub {{
+            color: var(--late-card-sub);
+            font-size: 0.86rem;
+            margin-top: 3px;
+            font-weight: 500;
+        }}
+        .cv-badge-danger {{
+            background: var(--red);
+            color: #FFFFFF;
+            font-weight: 800;
+            font-size: 0.77rem;
+            padding: 3px 10px;
+            border-radius: 999px;
+            display: inline-block;
         }}
         .cv-slot-free {{
             background: var(--surface-soft);
@@ -606,7 +648,7 @@ def aplicar_tema(modo: str):
             white-space: nowrap !important;
         }}
 
-        /* Botão VERMELHO específico (Concluir Ordem de Serviço) */
+        /* Botão VERMELHO específico (Concluir OS / Marcar como Frustrada) */
         div[data-testid="stElementContainer"]:has(.marker-red) + div[data-testid="stElementContainer"] button,
         div.element-container:has(.marker-red) + div.element-container button {{
             background-color: var(--red) !important;
@@ -781,6 +823,16 @@ def extrair_hora_int(hora_str: str) -> int:
         return 8
 
 
+def agendamento_esta_atrasado(ag: dict) -> bool:
+    """Retorna True se o agendamento ainda está pendente e já passou da data/horário marcado."""
+    if ag.get("status") != "Agendada":
+        return False
+    dt_d = parse_data(ag.get("data_agendamento"))
+    dt_h = parse_hora(ag.get("hora_agendamento"))
+    dt_agendada = datetime(dt_d.year, dt_d.month, dt_d.day, dt_h.hour, dt_h.minute, tzinfo=FUSO_BR)
+    return agora_br() > dt_agendada
+
+
 def opcoes_por_categoria(categoria: str) -> list:
     if categoria == "Rastreamento":
         return TIPOS_RASTREAMENTO_OPCOES
@@ -940,7 +992,6 @@ def _buscar_nominatim(query: str):
 
 
 def geocodificar_endereco(endereco: str, bias_coord=None, contexto_cidade: str = ""):
-    """Geocodifica endereço com cache em sessão (nunca trava cache em falha)."""
     texto = _normalizar_endereco_br(endereco)
     if len(texto) < 3:
         return None
@@ -966,14 +1017,12 @@ def geocodificar_endereco(endereco: str, bias_coord=None, contexto_cidade: str =
         if contexto_cidade and contexto_cidade.lower() not in sem_num.lower():
             tentativas.append(f"{sem_num}, {contexto_cidade}")
 
-    # 1º tenta Photon (rápido e tolerante a endereços brasileiros)
     for t in tentativas:
         coord = _buscar_photon(t, bias_coord=bias_coord)
         if coord:
             st.session_state.geo_cache[chave] = coord
             return coord
 
-    # 2º tenta Nominatim como reserva
     for t in tentativas[:3]:
         coord = _buscar_nominatim(t)
         if coord:
@@ -984,7 +1033,6 @@ def geocodificar_endereco(endereco: str, bias_coord=None, contexto_cidade: str =
 
 
 def calcular_distancia_rota(origem_end: str, destino_end: str):
-    """Retorna dict {'km': float, 'minutos': int, 'estimada': bool} ou None."""
     orig = str(origem_end or "").strip()
     dest = str(destino_end or "").strip()
     if len(orig) < 3 or len(dest) < 3:
@@ -1006,7 +1054,6 @@ def calcular_distancia_rota(origem_end: str, destino_end: str):
     lat1, lon1 = c_orig
     lat2, lon2 = c_dest
 
-    # Distância e tempo reais de carro via OSRM
     url = (
         f"https://router.project-osrm.org/route/v1/driving/"
         f"{lon1},{lat1};{lon2},{lat2}?overview=false"
@@ -1025,7 +1072,6 @@ def calcular_distancia_rota(origem_end: str, destino_end: str):
     except Exception:
         pass
 
-    # Reserva confiável: distância viária estimada + velocidade urbana média
     km_est = _haversine_km(lat1, lon1, lat2, lon2) * 1.25
     min_est = max(2, round((km_est / 30.0) * 60.0))
     res = {"km": km_est, "minutos": min_est, "estimada": True}
@@ -1068,7 +1114,7 @@ def carregar_agendamentos(apenas_agendadas=True):
 
 
 def verificar_conflito_horario(data_iso: str, hora_hhmm: str, ignorar_id=None):
-    """Bloqueia qualquer agendamento no mesmo dia e horário (vistoria ou rastreamento)."""
+    """Bloqueia qualquer agendamento no mesmo dia e horário (ignora agendamentos Frustrados)."""
     alvo = normalizar_hora(hora_hhmm)
     try:
         res = (
@@ -1079,6 +1125,8 @@ def verificar_conflito_horario(data_iso: str, hora_hhmm: str, ignorar_id=None):
         )
         for item in res.data or []:
             if ignorar_id is not None and item.get("id") == ignorar_id:
+                continue
+            if item.get("status") == "Frustrada":
                 continue
             if normalizar_hora(item.get("hora_agendamento")) == alvo:
                 return item
@@ -1144,28 +1192,45 @@ def render_card_agendamento(
     categoria_emp = emp_info.get("categoria_servico") or "Vistoria"
     sem_fin = bool(emp_info.get("sem_financeiro"))
     badge_cls = "cv-badge-red" if (categoria_emp == "Rastreamento" or "AD " in emp_nome.upper()) else "cv-badge-purple"
-    concluida = ag.get("status") == "Concluida"
+
+    status_ag = ag.get("status") or "Agendada"
+    concluida = status_ag == "Concluida"
+    frustrada = status_ag == "Frustrada"
+    atrasada = agendamento_esta_atrasado(ag)
+    alerta_vermelho = frustrada or atrasada
     ver = st.session_state.form_ag_ver
 
     endereco_cli = (ag.get("endereco") or "").strip()
     tipo_serv_ag = (ag.get("tipo_servico") or "").strip()
+    obs_txt = (ag.get("observacao") or "").strip()
 
-    msg_wa = (
-        f"Olá {ag.get('cliente_nome', '')}, tudo bem? "
-        f"Confirmando seu atendimento ({tipo_serv_ag or categoria_emp}) do veículo {ag.get('veiculo', '')} "
-        f"(Placa {ag.get('placa', '')}) em {fmt_data_br(ag.get('data_agendamento'))} às {ag.get('hora_agendamento', '')}."
-    )
+    if alerta_vermelho:
+        msg_wa = (
+            f"Olá {ag.get('cliente_nome', '')}, tudo bem? "
+            f"Sobre seu atendimento ({tipo_serv_ag or categoria_emp}) do veículo {ag.get('veiculo', '')} "
+            f"(Placa {ag.get('placa', '')}), gostaria de combinar um novo horário/data com você."
+        )
+    else:
+        msg_wa = (
+            f"Olá {ag.get('cliente_nome', '')}, tudo bem? "
+            f"Confirmando seu atendimento ({tipo_serv_ag or categoria_emp}) do veículo {ag.get('veiculo', '')} "
+            f"(Placa {ag.get('placa', '')}) em {fmt_data_br(ag.get('data_agendamento'))} às {ag.get('hora_agendamento', '')}."
+        )
     wa_url = link_whatsapp(ag.get("cliente_whatsapp", ""), msg_wa)
     wa_html = f'<a class="wa-btn" href="{wa_url}" target="_blank">💬 WhatsApp</a>' if wa_url else ""
 
     maps_url = link_rota_maps(ponto_base, endereco_cli)
     maps_html = f'<a class="maps-btn" href="{maps_url}" target="_blank">🗺️ Rota</a>' if maps_url else ""
 
-    status_badge = (
-        '<span class="cv-badge-green">✅ Concluída</span>'
-        if concluida
-        else '<span class="cv-badge-purple">✔ Preenchido</span>'
-    )
+    if concluida:
+        status_badge = '<span class="cv-badge-green">✅ Concluída</span>'
+    elif frustrada:
+        status_badge = '<span class="cv-badge-danger">❌ Frustrada</span>'
+    elif atrasada:
+        status_badge = '<span class="cv-badge-danger">⚠️ Atrasada</span>'
+    else:
+        status_badge = '<span class="cv-badge-purple">✔ Preenchido</span>'
+
     serv_badge = f'&nbsp;<span class="cv-badge-amber">🔧 {esc(tipo_serv_ag)}</span>' if tipo_serv_ag else ""
 
     # Bloco lateral com KM + tempo (~min) + estrelinha no mais próximo
@@ -1190,14 +1255,23 @@ def render_card_agendamento(
 
     if concluida:
         card_cls = "cv-card-green"
+        title_cls = "cv-card-green-title"
+        sub_cls = "cv-card-green-sub"
+    elif alerta_vermelho:
+        card_cls = "cv-card-late"
+        title_cls = "cv-card-late-title"
+        sub_cls = "cv-card-late-sub"
     elif eh_mais_proximo:
         card_cls = "cv-card-closest"
+        title_cls = "cv-card-title"
+        sub_cls = "cv-card-sub"
     else:
         card_cls = "cv-card-booked"
+        title_cls = "cv-card-title"
+        sub_cls = "cv-card-sub"
 
-    title_cls = "cv-card-green-title" if concluida else "cv-card-title"
-    sub_cls = "cv-card-green-sub" if concluida else "cv-card-sub"
     end_html = f'<div class="{sub_cls}">📍 {esc(endereco_cli)}</div>' if endereco_cli else ""
+    obs_html = f'<div class="{sub_cls}">📝 <strong>Obs. / Motivo:</strong> {esc(obs_txt)}</div>' if obs_txt else ""
 
     acoes_links = ""
     if wa_html or maps_html:
@@ -1223,6 +1297,7 @@ def render_card_agendamento(
                     <div class="{title_cls}">{esc(ag.get('veiculo', ''))} • Placa: {esc(ag.get('placa', ''))}</div>
                     <div class="{sub_cls}">👤 {esc(ag.get('cliente_nome', ''))} • 📞 {esc(ag.get('cliente_whatsapp') or 'Não informado')}</div>
                     {end_html}
+                    {obs_html}
                 </div>
                 {coluna_direita}
             </div>
@@ -1294,86 +1369,229 @@ def render_card_agendamento(
                     st.session_state.aviso_sucesso = "Agendamento removido."
                     st.rerun()
 
-        with st.expander(f"✏️ Corrigir agendamento — {ag.get('hora_agendamento', '')} • {ag.get('veiculo', '')}"):
-            opcoes_ag_emp = sorted({e for e in (nomes_empresas + [emp_nome]) if e})
-            if opcoes_ag_emp:
-                idx_ae = opcoes_ag_emp.index(emp_nome) if emp_nome in opcoes_ag_emp else 0
-                ea_emp = st.selectbox(
-                    "Empresa",
-                    opcoes_ag_emp,
-                    index=idx_ae,
-                    key=f"{prefixo}_ea_emp_{ag['id']}_{ver}",
-                )
-            else:
-                ea_emp = st.text_input("Empresa", value=emp_nome, key=f"{prefixo}_ea_emp_t_{ag['id']}_{ver}")
+        rotulo_exp_ag = (
+            f"🔄 Reagendar / Corrigir / Frustrada — {ag.get('hora_agendamento', '')} • {ag.get('veiculo', '')}"
+            if alerta_vermelho
+            else f"✏️ Corrigir / Reagendar / Frustrada — {ag.get('hora_agendamento', '')} • {ag.get('veiculo', '')}"
+        )
 
-            ea_emp_info = mapa_empresas.get(ea_emp, {})
-            ea_cat = ea_emp_info.get("categoria_servico") or "Vistoria"
-            ea_opcoes_serv = opcoes_por_categoria(ea_cat)
-            rotulo_serv = "Tipo de Serviço" if ea_cat == "Rastreamento" else "Tipo de Vistoria"
-            idx_ts = ea_opcoes_serv.index(tipo_serv_ag) if tipo_serv_ag in ea_opcoes_serv else 0
-            ea_serv = st.selectbox(
-                rotulo_serv,
-                ea_opcoes_serv,
-                index=idx_ts,
-                key=f"{prefixo}_ea_serv_{ag['id']}_{ver}_{ea_cat}",
-            )
+        with st.expander(rotulo_exp_ag):
+            tab_cor, tab_reag, tab_frust = st.tabs(["✏️ Corrigir", "🔄 Reagendar", "❌ Frustrada"])
 
-            ac1, ac2 = st.columns(2)
-            with ac1:
-                ea_cli = st.text_input("Cliente", value=ag.get("cliente_nome") or "", key=f"{prefixo}_ea_cli_{ag['id']}_{ver}")
-            with ac2:
-                ea_wa = st.text_input("WhatsApp do Cliente", value=ag.get("cliente_whatsapp") or "", key=f"{prefixo}_ea_wa_{ag['id']}_{ver}")
-
-            ea_end = st.text_input("Endereço do Cliente", value=endereco_cli, key=f"{prefixo}_ea_end_{ag['id']}_{ver}")
-
-            av1, av2 = st.columns([2, 1])
-            with av1:
-                ea_veic = st.text_input("Veículo", value=ag.get("veiculo") or "", key=f"{prefixo}_ea_veic_{ag['id']}_{ver}")
-            with av2:
-                ea_placa = st.text_input("Placa", value=ag.get("placa") or "", key=f"{prefixo}_ea_placa_{ag['id']}_{ver}")
-
-            ad1, ad2 = st.columns(2)
-            with ad1:
-                ea_data = st.date_input(
-                    "Data",
-                    value=parse_data(ag.get("data_agendamento")),
-                    format="DD/MM/YYYY",
-                    key=f"{prefixo}_ea_data_{ag['id']}_{ver}",
-                )
-            with ad2:
-                ea_hora = st.time_input(
-                    "Horário",
-                    value=parse_hora(ag.get("hora_agendamento")),
-                    key=f"{prefixo}_ea_hora_{ag['id']}_{ver}",
-                )
-
-            if st.button("💾 Salvar Alterações", key=f"{prefixo}_ea_save_{ag['id']}_{ver}", type="primary", use_container_width=True):
-                hora_fmt = ea_hora.strftime("%H:%M")
-                conflito = verificar_conflito_horario(ea_data.isoformat(), hora_fmt, ignorar_id=ag["id"])
-                if conflito:
-                    st.error(
-                        f"⛔ Horário indisponível! Já existe um agendamento em {ea_data.strftime('%d/%m/%Y')} "
-                        f"às {hora_fmt} ({conflito.get('empresa_nome', '')} — {conflito.get('veiculo', '')}). "
-                        "Escolha outro horário."
+            # --- ABA 1: CORRIGIR DADOS ---
+            with tab_cor:
+                opcoes_ag_emp = sorted({e for e in (nomes_empresas + [emp_nome]) if e})
+                if opcoes_ag_emp:
+                    idx_ae = opcoes_ag_emp.index(emp_nome) if emp_nome in opcoes_ag_emp else 0
+                    ea_emp = st.selectbox(
+                        "Empresa",
+                        opcoes_ag_emp,
+                        index=idx_ae,
+                        key=f"{prefixo}_ea_emp_{ag['id']}_{ver}",
                     )
                 else:
-                    supabase.table("agendamentos").update(
-                        {
-                            "empresa_nome": ea_emp.strip(),
-                            "tipo_servico": ea_serv,
-                            "cliente_nome": ea_cli.strip(),
-                            "cliente_whatsapp": ea_wa.strip(),
-                            "endereco": ea_end.strip(),
-                            "veiculo": ea_veic.strip(),
-                            "placa": ea_placa.strip().upper(),
-                            "data_agendamento": ea_data.isoformat(),
-                            "hora_agendamento": hora_fmt,
-                        }
-                    ).eq("id", ag["id"]).execute()
-                    st.session_state.form_ag_ver += 1
-                    st.session_state.aviso_sucesso = "Agendamento atualizado!"
-                    st.rerun()
+                    ea_emp = st.text_input("Empresa", value=emp_nome, key=f"{prefixo}_ea_emp_t_{ag['id']}_{ver}")
+
+                ea_emp_info = mapa_empresas.get(ea_emp, {})
+                ea_cat = ea_emp_info.get("categoria_servico") or "Vistoria"
+                ea_opcoes_serv = opcoes_por_categoria(ea_cat)
+                rotulo_serv = "Tipo de Serviço" if ea_cat == "Rastreamento" else "Tipo de Vistoria"
+                idx_ts = ea_opcoes_serv.index(tipo_serv_ag) if tipo_serv_ag in ea_opcoes_serv else 0
+                ea_serv = st.selectbox(
+                    rotulo_serv,
+                    ea_opcoes_serv,
+                    index=idx_ts,
+                    key=f"{prefixo}_ea_serv_{ag['id']}_{ver}_{ea_cat}",
+                )
+
+                ac1, ac2 = st.columns(2)
+                with ac1:
+                    ea_cli = st.text_input(
+                        "Cliente", value=ag.get("cliente_nome") or "", key=f"{prefixo}_ea_cli_{ag['id']}_{ver}"
+                    )
+                with ac2:
+                    ea_wa = st.text_input(
+                        "WhatsApp do Cliente",
+                        value=ag.get("cliente_whatsapp") or "",
+                        key=f"{prefixo}_ea_wa_{ag['id']}_{ver}",
+                    )
+
+                ea_end = st.text_input(
+                    "Endereço do Cliente", value=endereco_cli, key=f"{prefixo}_ea_end_{ag['id']}_{ver}"
+                )
+
+                av1, av2 = st.columns([2, 1])
+                with av1:
+                    ea_veic = st.text_input(
+                        "Veículo", value=ag.get("veiculo") or "", key=f"{prefixo}_ea_veic_{ag['id']}_{ver}"
+                    )
+                with av2:
+                    ea_placa = st.text_input(
+                        "Placa", value=ag.get("placa") or "", key=f"{prefixo}_ea_placa_{ag['id']}_{ver}"
+                    )
+
+                ad1, ad2 = st.columns(2)
+                with ad1:
+                    ea_data = st.date_input(
+                        "Data",
+                        value=parse_data(ag.get("data_agendamento")),
+                        format="DD/MM/YYYY",
+                        key=f"{prefixo}_ea_data_{ag['id']}_{ver}",
+                    )
+                with ad2:
+                    ea_hora = st.time_input(
+                        "Horário",
+                        value=parse_hora(ag.get("hora_agendamento")),
+                        key=f"{prefixo}_ea_hora_{ag['id']}_{ver}",
+                    )
+
+                ea_obs = st.text_input(
+                    "Observação / Motivo", value=obs_txt, key=f"{prefixo}_ea_obs_{ag['id']}_{ver}"
+                )
+
+                if st.button(
+                    "💾 Salvar Alterações",
+                    key=f"{prefixo}_ea_save_{ag['id']}_{ver}",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    hora_fmt = ea_hora.strftime("%H:%M")
+                    conflito = verificar_conflito_horario(ea_data.isoformat(), hora_fmt, ignorar_id=ag["id"])
+                    if conflito:
+                        st.error(
+                            f"⛔ Horário indisponível! Já existe um agendamento em {ea_data.strftime('%d/%m/%Y')} "
+                            f"às {hora_fmt} ({conflito.get('empresa_nome', '')} — {conflito.get('veiculo', '')}). "
+                            "Escolha outro horário."
+                        )
+                    else:
+                        try:
+                            supabase.table("agendamentos").update(
+                                {
+                                    "empresa_nome": ea_emp.strip(),
+                                    "tipo_servico": ea_serv,
+                                    "cliente_nome": ea_cli.strip(),
+                                    "cliente_whatsapp": ea_wa.strip(),
+                                    "endereco": ea_end.strip(),
+                                    "veiculo": ea_veic.strip(),
+                                    "placa": ea_placa.strip().upper(),
+                                    "data_agendamento": ea_data.isoformat(),
+                                    "hora_agendamento": hora_fmt,
+                                    "observacao": ea_obs.strip(),
+                                }
+                            ).eq("id", ag["id"]).execute()
+                            st.session_state.form_ag_ver += 1
+                            st.session_state.aviso_sucesso = "Agendamento atualizado!"
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao salvar alterações (confirme se rodou o SQL da coluna observacao): {e}")
+
+            # --- ABA 2: REAGENDAR ---
+            with tab_reag:
+                st.caption(
+                    f"Agendamento atual: **{fmt_data_br(ag.get('data_agendamento'))} às {ag.get('hora_agendamento', '')}**"
+                )
+                data_padrao_reag = (
+                    hoje_br() + timedelta(days=1)
+                    if parse_data(ag.get("data_agendamento")) <= hoje_br()
+                    else parse_data(ag.get("data_agendamento"))
+                )
+                rc1, rc2 = st.columns(2)
+                with rc1:
+                    nova_data_r = st.date_input(
+                        "Nova Data",
+                        value=data_padrao_reag,
+                        format="DD/MM/YYYY",
+                        key=f"{prefixo}_reag_data_{ag['id']}_{ver}",
+                    )
+                with rc2:
+                    nova_hora_r = st.time_input(
+                        "Novo Horário",
+                        value=parse_hora(ag.get("hora_agendamento")),
+                        key=f"{prefixo}_reag_hora_{ag['id']}_{ver}",
+                    )
+
+                motivo_reag = st.text_area(
+                    "Motivo do Reagendamento (Observação)",
+                    value="",
+                    placeholder="Ex: Não deu tempo de chegar / Cliente pediu para remarcar / Imprevisto na rota",
+                    height=80,
+                    key=f"{prefixo}_reag_obs_{ag['id']}_{ver}",
+                )
+
+                if st.button(
+                    "🔄 Confirmar Reagendamento",
+                    key=f"{prefixo}_reag_btn_{ag['id']}_{ver}",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    nova_hora_fmt = nova_hora_r.strftime("%H:%M")
+                    conflito_r = verificar_conflito_horario(
+                        nova_data_r.isoformat(), nova_hora_fmt, ignorar_id=ag["id"]
+                    )
+                    if conflito_r:
+                        st.error(
+                            f"⛔ Horário indisponível! Já existe um agendamento em {nova_data_r.strftime('%d/%m/%Y')} "
+                            f"às {nova_hora_fmt} ({conflito_r.get('empresa_nome', '')} — {conflito_r.get('veiculo', '')}). "
+                            "Escolha outro horário."
+                        )
+                    else:
+                        data_ant = fmt_data_br(ag.get("data_agendamento"))
+                        hora_ant = ag.get("hora_agendamento", "")
+                        if motivo_reag.strip():
+                            obs_final = f"Reagendado de {data_ant} {hora_ant}: {motivo_reag.strip()}"
+                        else:
+                            obs_final = f"Reagendado de {data_ant} {hora_ant}"
+                        try:
+                            supabase.table("agendamentos").update(
+                                {
+                                    "data_agendamento": nova_data_r.isoformat(),
+                                    "hora_agendamento": nova_hora_fmt,
+                                    "status": "Agendada",
+                                    "observacao": obs_final,
+                                }
+                            ).eq("id", ag["id"]).execute()
+                            st.session_state.form_ag_ver += 1
+                            st.session_state.aviso_sucesso = (
+                                f"Atendimento reagendado para {nova_data_r.strftime('%d/%m/%Y')} às {nova_hora_fmt}!"
+                            )
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao reagendar (confirme se rodou o SQL da coluna observacao): {e}")
+
+            # --- ABA 3: FRUSTRADA ---
+            with tab_frust:
+                st.caption(
+                    "Use esta opção quando não foi possível realizar o serviço. "
+                    "O atendimento fica marcado em vermelho com o motivo e o horário antigo é liberado."
+                )
+                motivo_frust = st.text_area(
+                    "Motivo / Observação",
+                    value=obs_txt,
+                    placeholder="Ex: Não deu tempo de atender hoje / Cliente não estava no local / Aguardando reagendamento",
+                    height=80,
+                    key=f"{prefixo}_frust_obs_{ag['id']}_{ver}",
+                )
+                render_html('<span class="marker-red"></span>')
+                if st.button(
+                    "❌ Marcar como Frustrada",
+                    key=f"{prefixo}_frust_btn_{ag['id']}_{ver}",
+                    use_container_width=True,
+                ):
+                    obs_f = motivo_frust.strip() or "Atendimento frustrado — aguardando reagendamento"
+                    try:
+                        supabase.table("agendamentos").update(
+                            {
+                                "status": "Frustrada",
+                                "observacao": obs_f,
+                            }
+                        ).eq("id", ag["id"]).execute()
+                        st.session_state.form_ag_ver += 1
+                        st.session_state.aviso_sucesso = (
+                            "Atendimento marcado como Frustrada. Você pode reagendá-lo quando combinar com o cliente."
+                        )
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao marcar como frustrada (confirme se rodou o SQL da coluna observacao): {e}")
 
 
 def render_editor_os(vistoria: dict, mapa_empresas: dict, nomes_empresas: list, prefixo_key: str):
@@ -1754,7 +1972,7 @@ def tela_perfil():
 
 
 # =========================================================
-# TELA 2: AGENDA DE VISTORIAS (BLOQUEIO DE HORÁRIO + KM EM TODOS)
+# TELA 2: AGENDA DE VISTORIAS (ATRASADAS / FRUSTRADAS + KM)
 # =========================================================
 def tela_agenda():
     st.markdown("### 📅 Agenda de Vistorias")
@@ -1767,6 +1985,12 @@ def tela_agenda():
     nomes_empresas = [e["nome"] for e in empresas]
     mapa_empresas = {e["nome"]: e for e in empresas}
     todos_agendamentos = carregar_agendamentos(apenas_agendadas=False)
+
+    atrasadas_ou_frustradas = [
+        ag
+        for ag in todos_agendamentos
+        if ag.get("status") == "Frustrada" or agendamento_esta_atrasado(ag)
+    ]
 
     hoje = hoje_br()
     amanha = hoje + timedelta(days=1)
@@ -1815,11 +2039,11 @@ def tela_agenda():
         with d2:
             hora_ag = st.time_input("Horário", value=time(8, 0), key=f"ag_hora_{ver}")
 
-        # Mostra na hora os horários já ocupados nessa data
         ocupados_data = sorted(
             normalizar_hora(a.get("hora_agendamento"))
             for a in todos_agendamentos
             if str(a.get("data_agendamento", ""))[:10] == data_ag.isoformat()
+            and a.get("status") != "Frustrada"
         )
         hora_escolhida_fmt = hora_ag.strftime("%H:%M")
         if ocupados_data:
@@ -1879,17 +2103,25 @@ def tela_agenda():
     inicio_semana = hoje - timedelta(days=hoje.weekday())
     fim_semana = inicio_semana + timedelta(days=6)
 
-    fc1, fc2, fc3 = st.columns(3)
-    for col, nome_f in [(fc1, "Hoje"), (fc2, "Amanhã"), (fc3, "Esta Semana")]:
+    qtd_alerta = len(atrasadas_ou_frustradas)
+    rotulo_alerta = f"⚠️ Atrasadas / Frustradas ({qtd_alerta})" if qtd_alerta else "⚠️ Atrasadas / Frustradas"
+
+    fc1, fc2, fc3, fc4 = st.columns([0.85, 0.95, 1.15, 1.75])
+    for col, chave_f, label_f in [
+        (fc1, "Hoje", "Hoje"),
+        (fc2, "Amanhã", "Amanhã"),
+        (fc3, "Esta Semana", "Esta Semana"),
+        (fc4, "Atrasadas", rotulo_alerta),
+    ]:
         with col:
-            ativo = st.session_state.agenda_filtro == nome_f
+            ativo = st.session_state.agenda_filtro == chave_f
             if st.button(
-                nome_f,
-                key=f"flt_{nome_f}",
+                label_f,
+                key=f"flt_{chave_f}",
                 type="primary" if ativo else "secondary",
                 use_container_width=True,
             ):
-                st.session_state.agenda_filtro = nome_f
+                st.session_state.agenda_filtro = chave_f
                 st.session_state.agenda_data_busca = None
                 st.rerun()
 
@@ -1909,6 +2141,33 @@ def tela_agenda():
                 st.session_state.agenda_filtro = "Data"
                 st.session_state.agenda_data_busca = data_pesquisa
                 st.rerun()
+
+    # VISÃO ATRASADAS / FRUSTRADAS (PARA REAGENDAMENTO RÁPIDO)
+    if st.session_state.agenda_filtro == "Atrasadas":
+        st.markdown(f"#### ⚠️ Atendimentos Atrasados ou Frustrados ({len(atrasadas_ou_frustradas)})")
+        if not atrasadas_ou_frustradas:
+            st.success("Nenhum atendimento atrasado ou frustrado no momento!")
+            return
+
+        st.caption(
+            "Clique em **💬 WhatsApp** para falar com o cliente ou abra **🔄 Reagendar / Corrigir / Frustrada** para remarcar outra data e registrar o motivo."
+        )
+        for ag in atrasadas_ou_frustradas:
+            d_info = (
+                calcular_distancia_rota(ponto_base, ag.get("endereco"))
+                if (ponto_base and (ag.get("endereco") or "").strip())
+                else None
+            )
+            render_card_agendamento(
+                ag,
+                mapa_empresas,
+                nomes_empresas,
+                prefixo="ag_atraso",
+                ponto_base=ponto_base,
+                dist_info=d_info,
+                mostrar_data=True,
+            )
+        return
 
     # VISÃO SEMANAL
     if st.session_state.agenda_filtro == "Esta Semana":
@@ -1954,7 +2213,7 @@ def tela_agenda():
             pends_sem = [
                 (a, dist_dia_sem[a["id"]])
                 for a in lista_dia
-                if a["id"] in dist_dia_sem and a.get("status") != "Concluida"
+                if a["id"] in dist_dia_sem and a.get("status") == "Agendada"
             ]
             pends_sem.sort(key=lambda x: x[1]["km"])
             id_prox_sem = pends_sem[0][0]["id"] if pends_sem else None
@@ -1984,7 +2243,6 @@ def tela_agenda():
         ag for ag in todos_agendamentos if str(ag.get("data_agendamento", ""))[:10] == data_ref.isoformat()
     ]
 
-    # Calcula distância e tempo para TODOS os atendimentos do dia com endereço
     distancias_dia = {}
     if ponto_base and ags_do_dia:
         for ag in ags_do_dia:
@@ -1994,14 +2252,17 @@ def tela_agenda():
                 if info:
                     distancias_dia[ag["id"]] = info
 
-    # Ranking de proximidade de todos os atendimentos do dia
     todos_com_dist = [(ag, distancias_dia[ag["id"]]) for ag in ags_do_dia if ag["id"] in distancias_dia]
     todos_com_dist.sort(key=lambda par: par[1]["km"])
 
-    pendentes_com_dist = [(ag, d) for ag, d in todos_com_dist if ag.get("status") != "Concluida"]
+    pendentes_com_dist = [(ag, d) for ag, d in todos_com_dist if ag.get("status") == "Agendada"]
     id_mais_proximo = pendentes_com_dist[0][0]["id"] if pendentes_com_dist else None
 
-    horarios_preenchidos = sorted(normalizar_hora(x.get("hora_agendamento")) for x in ags_do_dia)
+    horarios_preenchidos = sorted(
+        normalizar_hora(x.get("hora_agendamento"))
+        for x in ags_do_dia
+        if x.get("status") != "Frustrada"
+    )
     resumo_horarios = (
         f"Horários preenchidos: <strong>{esc(', '.join(horarios_preenchidos))}</strong>"
         if horarios_preenchidos
@@ -2021,7 +2282,6 @@ def tela_agenda():
         """
     )
 
-    # Quadro inteligente com TODOS os atendimentos ordenados do mais próximo ao mais distante
     if ponto_base and ags_do_dia:
         if todos_com_dist:
             linhas_rota = []
@@ -2067,7 +2327,6 @@ def tela_agenda():
     elif ags_do_dia and not ponto_base:
         st.info("💡 Cadastre seu **Ponto Base** em **👤 Perfil** (no topo) para ver a distância em km e minutos de cada cliente.")
 
-    # Grade completa de horários do dia (07:00 às 19:00)
     por_hora = {}
     for ag in ags_do_dia:
         h = extrair_hora_int(ag.get("hora_agendamento"))
@@ -2308,28 +2567,41 @@ def tela_ordem_servico():
                 except Exception as e:
                     st.error(f"Erro ao concluir Ordem de Serviço: {e}")
 
+    todos_ags = carregar_agendamentos(apenas_agendadas=False)
+    agendadas = [a for a in todos_ags if a.get("status") == "Agendada"]
+    atrasadas_frust = [
+        a for a in todos_ags if a.get("status") == "Frustrada" or agendamento_esta_atrasado(a)
+    ]
+    vistorias = carregar_vistorias()
+
+    qtd_af = len(atrasadas_frust)
+    lbl_af = f"⚠️ Atrasadas / Frustradas ({qtd_af})" if qtd_af else "⚠️ Atrasadas / Frustradas"
+
     render_html("<div style='height:6px;'></div>")
-    s1, s2, s3 = st.columns(3)
-    for col, nome_sub in [
-        (s1, "OS do Dia"),
-        (s2, "Próximas OS"),
-        (s3, "Histórico de OS"),
+    s1, s2, s3, s4 = st.columns([1.0, 1.1, 1.75, 1.15])
+    for col, chave_sub, rotulo_sub in [
+        (s1, "OS do Dia", "OS do Dia"),
+        (s2, "Próximas OS", "Próximas OS"),
+        (s3, "Atrasadas / Frustradas", lbl_af),
+        (s4, "Histórico de OS", "Histórico de OS"),
     ]:
         with col:
             if st.button(
-                nome_sub,
-                key=f"sub_os_{nome_sub}",
-                type="primary" if st.session_state.os_subaba == nome_sub else "secondary",
+                rotulo_sub,
+                key=f"sub_os_{chave_sub}",
+                type="primary" if st.session_state.os_subaba == chave_sub else "secondary",
                 use_container_width=True,
             ):
-                st.session_state.os_subaba = nome_sub
+                st.session_state.os_subaba = chave_sub
                 st.rerun()
 
-    agendadas = carregar_agendamentos(apenas_agendadas=True)
-    vistorias = carregar_vistorias()
-
     if st.session_state.os_subaba == "OS do Dia":
-        ags_hoje = [a for a in agendadas if str(a.get("data_agendamento", ""))[:10] == hoje.isoformat()]
+        ags_hoje = [
+            a
+            for a in todos_ags
+            if str(a.get("data_agendamento", ""))[:10] == hoje.isoformat()
+            and a.get("status") in ("Agendada", "Frustrada")
+        ]
         concl_hoje = [v for v in vistorias if str(v.get("data_vistoria", ""))[:10] == hoje.isoformat()]
 
         st.markdown(f"#### 📌 Pendentes de Hoje ({hoje.strftime('%d/%m/%Y')}) — {len(ags_hoje)}")
@@ -2343,7 +2615,10 @@ def tela_ordem_servico():
                         d_i = calcular_distancia_rota(ponto_base, ag["endereco"])
                         if d_i:
                             dists_hoje[ag["id"]] = d_i
-            ordenados_h = sorted(dists_hoje.items(), key=lambda x: x[1]["km"])
+            ordenados_h = sorted(
+                [(a["id"], dists_hoje[a["id"]]) for a in ags_hoje if a["id"] in dists_hoje and a.get("status") == "Agendada"],
+                key=lambda x: x[1]["km"],
+            )
             id_prox_h = ordenados_h[0][0] if ordenados_h else None
 
             for ag in ags_hoje:
@@ -2382,6 +2657,27 @@ def tela_ordem_servico():
                     mapa_empresas,
                     nomes_empresas,
                     prefixo="os_prox",
+                    ponto_base=ponto_base,
+                    dist_info=d_info,
+                    mostrar_data=True,
+                )
+
+    elif st.session_state.os_subaba == "Atrasadas / Frustradas":
+        st.markdown(f"#### ⚠️ Atrasadas ou Frustradas ({len(atrasadas_frust)})")
+        if not atrasadas_frust:
+            st.success("Nenhuma Ordem de Serviço atrasada ou frustrada!")
+        else:
+            for ag in atrasadas_frust:
+                d_info = (
+                    calcular_distancia_rota(ponto_base, ag.get("endereco"))
+                    if (ponto_base and (ag.get("endereco") or "").strip())
+                    else None
+                )
+                render_card_agendamento(
+                    ag,
+                    mapa_empresas,
+                    nomes_empresas,
+                    prefixo="os_atraso",
                     ponto_base=ponto_base,
                     dist_info=d_info,
                     mostrar_data=True,
