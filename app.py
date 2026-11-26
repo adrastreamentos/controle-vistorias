@@ -2466,21 +2466,22 @@ def render_editor_os(vistoria: dict, mapa_empresas: dict, nomes_empresas: list, 
 # =========================================================
 def gerar_pdf_individual(vistoria: dict, foto_base64: str = None) -> bytes:
     pdf = FPDF()
+    pdf.set_margins(12, 12, 12)
     pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_auto_page_break(auto=True, margin=22)
 
     pdf.set_fill_color(78, 26, 107)
     pdf.rect(0, 0, 210, 28, "F")
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 16)
-    pdf.set_xy(12, 8)
-    pdf.cell(0, 8, limpar_latin1("CONTROLE DE VISTORIAS - ORDEM DE SERVIÇO"), ln=True)
+    pdf.set_xy(12, 7)
+    pdf.cell(186, 8, limpar_latin1("CONTROLE DE VISTORIAS - ORDEM DE SERVIÇO"), border=0)
     pdf.set_font("Helvetica", "", 10)
-    pdf.set_x(12)
-    pdf.cell(0, 6, limpar_latin1(f"Relatório Individual | OS #{vistoria.get('id', '')}"), ln=True)
+    pdf.set_xy(12, 16)
+    pdf.cell(186, 6, limpar_latin1(f"Relatório Individual | OS #{vistoria.get('id', '')}"), border=0)
 
     pdf.set_text_color(31, 41, 55)
-    pdf.ln(12)
+    pdf.set_xy(12, 36)
 
     campos = [
         ("Empresa Parceira", vistoria.get("empresa_nome", "-")),
@@ -2502,34 +2503,56 @@ def gerar_pdf_individual(vistoria: dict, foto_base64: str = None) -> bytes:
         campos.append(("Data do Recebimento", fmt_data_br(vistoria.get("data_recebimento"))))
 
     for rotulo, valor in campos:
+        y_linha = pdf.get_y()
+        if y_linha > 260:
+            pdf.add_page()
+            y_linha = pdf.get_y()
+        pdf.set_xy(12, y_linha)
         pdf.set_font("Helvetica", "B", 11)
         pdf.cell(52, 8, limpar_latin1(f"{rotulo}:"), border=0)
+
+        pdf.set_xy(64, y_linha)
         pdf.set_font("Helvetica", "", 11)
-        pdf.multi_cell(0, 8, limpar_latin1(str(valor)), border=0)
+        texto_valor = limpar_latin1(str(valor or "-").strip() or "-")
+        pdf.multi_cell(134, 8, texto_valor, border=0)
 
     if foto_base64:
         pdf.ln(6)
+        if pdf.get_y() > 175:
+            pdf.add_page()
+        pdf.set_x(12)
         pdf.set_font("Helvetica", "B", 12)
-        pdf.cell(0, 8, limpar_latin1("Registro Fotográfico do Veículo"), ln=True)
+        pdf.cell(186, 8, limpar_latin1("Registro Fotográfico do Veículo"), border=0)
+        pdf.ln(10)
         tmp_path = None
         try:
             img_bytes = base64_para_bytes(foto_base64)
+            with Image.open(io.BytesIO(img_bytes)) as im_dim:
+                iw, ih = im_dim.size
+            largura_mm = 130.0
+            altura_max_mm = max(40.0, 268.0 - pdf.get_y())
+            if iw > 0 and ih > 0:
+                altura_mm = largura_mm * (ih / iw)
+                if altura_mm > altura_max_mm:
+                    largura_mm = altura_max_mm * (iw / ih)
             with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                 tmp.write(img_bytes)
                 tmp_path = tmp.name
-            pdf.image(tmp_path, x=15, w=130)
+            pdf.image(tmp_path, x=15, y=pdf.get_y(), w=largura_mm)
         except Exception:
+            pdf.set_x(12)
             pdf.set_font("Helvetica", "I", 10)
-            pdf.cell(0, 8, limpar_latin1("Não foi possível embutir a imagem no PDF."), ln=True)
+            pdf.cell(186, 8, limpar_latin1("Não foi possível embutir a imagem no PDF."), border=0)
         finally:
             if tmp_path and os.path.exists(tmp_path):
                 os.remove(tmp_path)
 
-    pdf.set_y(-20)
+    pdf.set_auto_page_break(auto=False)
+    pdf.set_xy(12, 278)
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(107, 114, 128)
     pdf.cell(
-        0,
+        186,
         8,
         limpar_latin1(f"Emitido em {agora_br().strftime('%d/%m/%Y %H:%M')} - Controle de Vistorias"),
         align="C",
