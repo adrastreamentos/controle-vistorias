@@ -1291,6 +1291,20 @@ def extrair_servico_os(texto: str, categoria: str = "Vistoria") -> str:
     return validas[0]
 
 
+def descrever_servico_whatsapp(categoria_emp: str, tipo_serv_ag: str) -> str:
+    """Retorna a descrição natural do serviço para a mensagem do WhatsApp."""
+    t = str(tipo_serv_ag or "").strip().lower()
+    if "instala" in t:
+        return "de instalação"
+    if "retirad" in t:
+        return "de retirada"
+    if "manuten" in t:
+        return "de manutenção"
+    if categoria_emp == "Rastreamento":
+        return "de rastreamento"
+    return "de vistoria"
+
+
 def link_whatsapp(telefone: str, mensagem: str = "") -> str:
     digitos = re.sub(r"\D", "", str(telefone or ""))
     if not digitos:
@@ -1912,17 +1926,21 @@ def render_card_agendamento(
     card_uid = f"{prefixo}_{ag['id']}"
     os_aberta_neste_card = st.session_state.os_card_aberto_id == card_uid
 
+    nome_cli = (ag.get("cliente_nome") or "").strip()
+    saudacao = f"Olá {nome_cli}, tudo bem?" if nome_cli else "Olá, tudo bem?"
+    desc_servico = descrever_servico_whatsapp(categoria_emp, tipo_serv_ag)
+
     if alerta_vermelho:
         msg_wa = (
-            f"Olá {ag.get('cliente_nome', '')}, tudo bem? "
-            f"Sobre seu atendimento ({tipo_serv_ag or categoria_emp}) do veículo {ag.get('veiculo', '')} "
+            f"{saudacao} "
+            f"Sobre seu atendimento {desc_servico} do veículo {ag.get('veiculo', '')} "
             f"(Placa {ag.get('placa', '')}), gostaria de combinar um novo horário/data com você."
         )
     else:
         msg_wa = (
-            f"Olá {ag.get('cliente_nome', '')}, tudo bem? "
-            f"Confirmando seu atendimento ({tipo_serv_ag or categoria_emp}) do veículo {ag.get('veiculo', '')} "
-            f"(Placa {ag.get('placa', '')}) em {fmt_data_br(ag.get('data_agendamento'))} às {ag.get('hora_agendamento', '')}."
+            f"{saudacao} "
+            f"Confirmando seu atendimento {desc_servico} do veículo {ag.get('veiculo', '')} "
+            f"(Placa {ag.get('placa', '')}) no dia {fmt_data_br(ag.get('data_agendamento'))} às {ag.get('hora_agendamento', '')}."
         )
     wa_url = link_whatsapp(ag.get("cliente_whatsapp", ""), msg_wa)
     wa_html = f'<a class="wa-btn" href="{wa_url}" target="_blank">💬 WhatsApp</a>' if wa_url else ""
