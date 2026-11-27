@@ -241,7 +241,7 @@ def fechar_paineis_abertos():
 
 
 # =========================================================
-# TEMA DINÂMICO (MODO CLARO E MODO ESCURO) + LAYOUT LIMPO
+# TEMA DINÂMICO (MODO CLARO E MODO ESCURO) + LOGOS + LAYOUT
 # =========================================================
 def aplicar_tema(modo: str):
     if modo == "escuro":
@@ -617,6 +617,52 @@ def aplicar_tema(modo: str):
             color: var(--purple-soft-text);
             font-size: 0.87rem;
             font-weight: 700;
+        }}
+
+        /* SÍMBOLOS / LOGOS PEQUENAS DAS EMPRESAS */
+        .cv-badge-emp {{
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 5px !important;
+            padding: 2px 9px 2px 4px !important;
+        }}
+        .cv-logo-pill {{
+            width: 17px;
+            height: 17px;
+            border-radius: 50%;
+            object-fit: contain;
+            background: #FFFFFF;
+            padding: 1px;
+            flex-shrink: 0;
+            display: inline-block;
+        }}
+        .cv-logo-title-wrap {{
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+        }}
+        .cv-logo-title {{
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            object-fit: contain;
+            background: #FFFFFF;
+            border: 1px solid var(--border);
+            padding: 1.5px;
+            flex-shrink: 0;
+            display: inline-block;
+        }}
+        .cv-logo-inline {{
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            object-fit: contain;
+            background: #FFFFFF;
+            border: 1px solid var(--border);
+            padding: 1px;
+            vertical-align: -3px;
+            margin-right: 4px;
+            display: inline-block;
         }}
 
         /* BARRA DE NAVEGAÇÃO INFERIOR ESTILO APP */
@@ -1419,6 +1465,48 @@ def comprimir_imagem_para_base64(arquivo_upload) -> str:
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
+def comprimir_logo_para_base64(arquivo_upload) -> str:
+    """Reduz a logo para um ícone bem leve (96x96 PNG) mantendo fundo transparente."""
+    img = Image.open(arquivo_upload).convert("RGBA")
+    resample = getattr(Image, "Resampling", Image).LANCZOS
+    img.thumbnail((96, 96), resample)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
+def html_badge_empresa(emp_nome: str, mapa_empresas: dict, badge_cls: str) -> str:
+    """Renderiza a pílula da empresa com o símbolo pequeno ao lado do nome (se cadastrado)."""
+    logo_b64 = ((mapa_empresas.get(emp_nome) or {}).get("logo_base64") or "").strip()
+    if logo_b64:
+        return (
+            f'<span class="{badge_cls} cv-badge-emp">'
+            f'<img class="cv-logo-pill" src="data:image/png;base64,{logo_b64}" alt="" />'
+            f'{esc(emp_nome)}</span>'
+        )
+    return f'<span class="{badge_cls}">{esc(emp_nome)}</span>'
+
+
+def html_titulo_empresa(emp_nome: str, mapa_empresas: dict, titulo_cls: str = "cv-card-title") -> str:
+    """Renderiza o título da empresa (Empresas/Financeiro) com a logo circular pequena."""
+    logo_b64 = ((mapa_empresas.get(emp_nome) or {}).get("logo_base64") or "").strip()
+    if logo_b64:
+        return (
+            f'<span class="cv-logo-title-wrap {titulo_cls}">'
+            f'<img class="cv-logo-title" src="data:image/png;base64,{logo_b64}" alt="" />'
+            f'{esc(emp_nome)}</span>'
+        )
+    return f'<span class="{titulo_cls}">🏢 {esc(emp_nome)}</span>'
+
+
+def html_empresa_inline(emp_nome: str, mapa_empresas: dict) -> str:
+    """Renderiza o símbolo pequenininho antes do nome da empresa nas linhas de OS concluída/PDF."""
+    logo_b64 = ((mapa_empresas.get(emp_nome) or {}).get("logo_base64") or "").strip()
+    if logo_b64:
+        return f'<img class="cv-logo-inline" src="data:image/png;base64,{logo_b64}" alt="" />{esc(emp_nome)}'
+    return f'🏢 {esc(emp_nome)}'
+
+
 def base64_para_bytes(b64_str: str) -> bytes:
     return base64.b64decode(b64_str)
 
@@ -1466,7 +1554,7 @@ def _resolver_cep_viacep(texto: str) -> str:
     try:
         req = urllib.request.Request(
             f"https://viacep.com.br/ws/{cep}/json/",
-            headers={"User-Agent": "ControleDeVistoriasAD/4.1"},
+            headers={"User-Agent": "ControleDeVistoriasAD/4.2"},
         )
         with urllib.request.urlopen(req, timeout=1.8) as resp:
             d = json.loads(resp.read().decode("utf-8"))
@@ -1483,7 +1571,7 @@ def _buscar_photon(query: str, bias_coord=None):
         params["lat"] = f"{bias_coord[0]:.5f}"
         params["lon"] = f"{bias_coord[1]:.5f}"
     url = f"https://photon.komoot.io/api/?{urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": "ControleDeVistoriasAD/4.1"})
+    req = urllib.request.Request(url, headers={"User-Agent": "ControleDeVistoriasAD/4.2"})
     try:
         with urllib.request.urlopen(req, timeout=1.8) as resp:
             dados = json.loads(resp.read().decode("utf-8"))
@@ -1500,7 +1588,7 @@ def _buscar_nominatim(query: str):
     params = urlencode({"q": query, "format": "json", "limit": 1, "countrycodes": "br"})
     url = f"https://nominatim.openstreetmap.org/search?{params}"
     req = urllib.request.Request(
-        url, headers={"User-Agent": "ControleDeVistoriasAD/4.1 (adrastreamentos@gmail.com)"}
+        url, headers={"User-Agent": "ControleDeVistoriasAD/4.2 (adrastreamentos@gmail.com)"}
     )
     try:
         with urllib.request.urlopen(req, timeout=2.0) as resp:
@@ -1577,7 +1665,7 @@ def calcular_distancia_rota(origem_end: str, destino_end: str, c_orig_pre=None):
     lat1, lon1 = c_orig
     lat2, lon2 = c_dest
     url = f"https://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=false"
-    req = urllib.request.Request(url, headers={"User-Agent": "ControleDeVistoriasAD/4.1"})
+    req = urllib.request.Request(url, headers={"User-Agent": "ControleDeVistoriasAD/4.2"})
     try:
         with urllib.request.urlopen(req, timeout=1.8) as resp:
             dados = json.loads(resp.read().decode("utf-8"))
@@ -2104,7 +2192,7 @@ def render_painel_edicao_agendamento(ag: dict, mapa_empresas: dict, nomes_empres
 
 
 # =========================================================
-# CARD DE AGENDAMENTO (CLEAN + OFERTA PÓS-VISTORIA)
+# CARD DE AGENDAMENTO (COM LOGO PEQUENA + OFERTA PÓS-VISTORIA)
 # =========================================================
 def render_card_agendamento(
     ag: dict,
@@ -2121,6 +2209,7 @@ def render_card_agendamento(
     categoria_emp = emp_info.get("categoria_servico") or "Vistoria"
     sem_fin = bool(emp_info.get("sem_financeiro"))
     badge_cls = "cv-badge-red" if (categoria_emp == "Rastreamento" or "AD " in emp_nome.upper()) else "cv-badge-purple"
+    emp_badge_html = html_badge_empresa(emp_nome, mapa_empresas, badge_cls)
 
     status_ag = ag.get("status") or "Agendada"
     concluida = status_ag == "Concluida"
@@ -2207,7 +2296,7 @@ def render_card_agendamento(
             <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:6px;">
                 <span style="font-size:1.0rem;font-weight:800;">{topo_tempo}</span>
                 {status_badge}
-                <span class="{badge_cls}">{esc(emp_nome)}</span>
+                {emp_badge_html}
                 {dist_badge_html}
             </div>
             <div class="{title_cls}">{esc(ag.get('veiculo', ''))} • {esc(ag.get('placa', ''))}</div>
@@ -2912,7 +3001,7 @@ def tela_agenda():
 
 
 # =========================================================
-# TELA 3: OS (BUSCA INTELIGENTE + OFERTA RASTREADOR)
+# TELA 3: OS (BUSCA INTELIGENTE + LOGOS + OFERTA RASTREADOR)
 # =========================================================
 def tela_ordem_servico():
     mostrar_aviso_pendente()
@@ -3039,6 +3128,7 @@ def _render_card_os_concluida(v: dict, mapa_empresas: dict, nomes_empresas: list
     badge = "cv-badge-green" if st_pg == "Recebido" else ("cv-badge-amber" if st_pg == "Sem Cobrança" else "cv-badge-purple")
     valor_str = "Sem cobrança" if st_pg == "Sem Cobrança" else fmt_moeda(v.get("valor", 0))
     cli_txt = f"👤 {esc(v['cliente_nome'])} • " if v.get("cliente_nome") else ""
+    emp_inline = html_empresa_inline(v["empresa_nome"], mapa_empresas)
     end_txt = f"<div class='cv-card-sub'>📍 {esc(v['endereco'])}</div>" if v.get("endereco") else ""
     uid = f"{prefixo}_{v['id']}"
     aberto = st.session_state.os_concl_aberto_id == uid
@@ -3058,7 +3148,7 @@ def _render_card_os_concluida(v: dict, mapa_empresas: dict, nomes_empresas: list
                 <span class="{badge}">{esc(st_pg)}</span>
             </div>
             <div class="cv-card-sub">
-                {cli_txt}🏢 {esc(v['empresa_nome'])} • 📅 {fmt_data_br(v['data_vistoria'])} • 🔧 {esc(v.get('tipo_vistoria', 'Cautelar'))} •
+                {cli_txt}{emp_inline} • 📅 {fmt_data_br(v['data_vistoria'])} • 🔧 {esc(v.get('tipo_vistoria', 'Cautelar'))} •
                 <strong style="color:var(--text);">{valor_str}</strong>
             </div>
             {end_txt}
@@ -3090,12 +3180,13 @@ def _render_card_os_concluida(v: dict, mapa_empresas: dict, nomes_empresas: list
 
 
 # =========================================================
-# TELA 4: EMPRESAS PARCEIRAS
+# TELA 4: EMPRESAS PARCEIRAS (COM UPLOAD DE LOGO / SÍMBOLO)
 # =========================================================
 def tela_empresas():
     mostrar_aviso_pendente()
     ver = st.session_state.form_emp_ver
     empresas = carregar_empresas()
+    mapa_empresas = {e["nome"]: e for e in empresas}
     render_html(f'<div class="cv-day-summary-slim">🤝 Empresas Parceiras • {len(empresas)} cadastrada(s)</div>')
 
     if not empresas:
@@ -3109,6 +3200,7 @@ def tela_empresas():
             tipos_label = emp.get("tipo_vistoria") or opcoes_por_categoria(cat_emp)[0]
             cat_badge = '<span class="cv-badge-red">📡 Rastreamento</span>' if cat_emp == "Rastreamento" else '<span class="cv-badge-purple">🔍 Vistoria</span>'
             fin_txt = "Somente Agenda (Sem Cobrança)" if sem_fin_emp else f"Paga dia {int(emp.get('dia_pagamento') or 15):02d} • {fmt_moeda(emp.get('valor_padrao', 0))}"
+            titulo_emp_html = html_titulo_empresa(emp["nome"], mapa_empresas)
             aberto = st.session_state.emp_edit_aberto_id == emp["id"]
 
             render_html(
@@ -3116,7 +3208,7 @@ def tela_empresas():
                 <div class="cv-card">
                     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
                         <div style="flex:1;min-width:180px;">
-                            <div class="cv-card-title">🏢 {esc(emp['nome'])}</div>
+                            <div>{titulo_emp_html}</div>
                             <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:5px;">
                                 {cat_badge}
                                 <span class="cv-badge-amber">{esc(tipos_label)}</span>
@@ -3141,6 +3233,29 @@ def tela_empresas():
                     e_opcoes = opcoes_por_categoria(e_cat)
                     e_tipos = st.multiselect("Tipo de Serviço" if e_cat == "Rastreamento" else "Tipo de Vistoria", e_opcoes, default=parse_tipos_empresa(emp.get("tipo_vistoria"), e_cat), key=f"ee_tipos_{emp['id']}_{ver}_{e_cat}")
                     e_sem_fin = st.checkbox("Sem controle financeiro (apenas agenda)", value=sem_fin_emp if e_cat == cat_emp else (e_cat == "Rastreamento"), key=f"ee_semfin_{emp['id']}_{ver}_{e_cat}")
+
+                    st.markdown("**Logo / Símbolo da Empresa (opcional)**")
+                    logo_atual = (emp.get("logo_base64") or "").strip()
+                    if logo_atual:
+                        lc1, lc2 = st.columns([0.9, 3.1])
+                        with lc1:
+                            try:
+                                st.image(base64_para_bytes(logo_atual), width=48)
+                            except Exception:
+                                pass
+                        with lc2:
+                            e_remover_logo = st.checkbox("Remover logo atual", value=False, key=f"ee_remlogo_{emp['id']}_{ver}")
+                    else:
+                        e_remover_logo = False
+
+                    e_logo_up = st.file_uploader(
+                        "Anexar ou trocar símbolo (PNG ou JPG)",
+                        type=["png", "jpg", "jpeg", "webp"],
+                        key=f"ee_logo_{emp['id']}_{ver}",
+                    )
+                    if e_logo_up is not None:
+                        st.image(e_logo_up, width=52)
+
                     e_resp = st.text_input("Nome do Responsável", value=emp.get("responsavel") or "", key=f"ee_resp_{emp['id']}_{ver}")
                     e_wa = st.text_input("Celular (WhatsApp)", value=emp.get("whatsapp") or "", key=f"ee_wa_{emp['id']}_{ver}")
 
@@ -3157,23 +3272,37 @@ def tela_empresas():
                     with b1:
                         render_html('<span class="cv-inline-pair-marker marker-hidden"></span>')
                         if st.button("💾 Salvar Alterações", key=f"ee_save_{emp['id']}_{ver}", type="primary", use_container_width=True):
-                            supabase.table("vistorias_empresas").update(
-                                {
-                                    "nome": e_nome.strip(),
-                                    "categoria_servico": e_cat,
-                                    "tipo_vistoria": ", ".join(e_tipos) if e_tipos else e_opcoes[0],
-                                    "sem_financeiro": bool(e_sem_fin),
-                                    "responsavel": e_resp.strip(),
-                                    "whatsapp": e_wa.strip(),
-                                    "dia_pagamento": int(e_dia),
-                                    "valor_padrao": float(e_val),
-                                }
-                            ).eq("id", emp["id"]).execute()
-                            limpar_cache_empresas()
-                            st.session_state.emp_edit_aberto_id = None
-                            st.session_state.form_emp_ver += 1
-                            st.session_state.aviso_sucesso = f"Alterações de '{e_nome.strip()}' salvas!"
-                            st.rerun()
+                            nova_logo_b64 = None if e_remover_logo else (logo_atual or None)
+                            if e_logo_up is not None:
+                                try:
+                                    nova_logo_b64 = comprimir_logo_para_base64(e_logo_up)
+                                except Exception as err_l:
+                                    st.error(f"Erro ao processar a logo: {err_l}")
+                                    nova_logo_b64 = logo_atual or None
+                            try:
+                                supabase.table("vistorias_empresas").update(
+                                    {
+                                        "nome": e_nome.strip(),
+                                        "categoria_servico": e_cat,
+                                        "tipo_vistoria": ", ".join(e_tipos) if e_tipos else e_opcoes[0],
+                                        "sem_financeiro": bool(e_sem_fin),
+                                        "responsavel": e_resp.strip(),
+                                        "whatsapp": e_wa.strip(),
+                                        "dia_pagamento": int(e_dia),
+                                        "valor_padrao": float(e_val),
+                                        "logo_base64": nova_logo_b64,
+                                    }
+                                ).eq("id", emp["id"]).execute()
+                                limpar_cache_empresas()
+                                st.session_state.emp_edit_aberto_id = None
+                                st.session_state.form_emp_ver += 1
+                                st.session_state.aviso_sucesso = f"Alterações de '{e_nome.strip()}' salvas!"
+                                st.rerun()
+                            except Exception as e:
+                                if "logo_base64" in str(e):
+                                    st.error("Rode o comando SQL no Supabase para criar a coluna `logo_base64` na tabela `vistorias_empresas`.")
+                                else:
+                                    st.error(f"Erro ao salvar alterações: {e}")
                     with b2:
                         render_html('<span class="marker-red marker-hidden"></span>')
                         if st.button("🗑️ Excluir", key=f"ee_del_{emp['id']}_{ver}", use_container_width=True):
@@ -3205,6 +3334,14 @@ def tela_empresas():
                 tipos_sel = st.multiselect("Tipo de Vistoria", TIPOS_VISTORIA_OPCOES, default=["Cautelar"], key=f"emp_tipos_vis_{ver}")
                 sem_fin = st.checkbox("Sem controle financeiro (apenas agenda)", value=False, key=f"emp_semfin_vis_{ver}")
 
+            logo_up_nova = st.file_uploader(
+                "Logo / Símbolo da Empresa (opcional — PNG ou JPG)",
+                type=["png", "jpg", "jpeg", "webp"],
+                key=f"emp_logo_{ver}",
+            )
+            if logo_up_nova is not None:
+                st.image(logo_up_nova, width=52)
+
             responsavel = st.text_input("Nome do Responsável", key=f"emp_resp_{ver}")
             whatsapp = st.text_input("Celular (WhatsApp)", key=f"emp_wa_{ver}")
 
@@ -3221,6 +3358,13 @@ def tela_empresas():
                 if not nome.strip():
                     st.warning("Informe o nome da empresa.")
                 else:
+                    logo_nova_b64 = None
+                    if logo_up_nova is not None:
+                        try:
+                            logo_nova_b64 = comprimir_logo_para_base64(logo_up_nova)
+                        except Exception as err_l:
+                            st.error(f"Erro ao processar a logo: {err_l}")
+                            return
                     try:
                         supabase.table("vistorias_empresas").insert(
                             {
@@ -3232,6 +3376,7 @@ def tela_empresas():
                                 "whatsapp": whatsapp.strip(),
                                 "dia_pagamento": int(dia_pagamento),
                                 "valor_padrao": float(valor_padrao),
+                                "logo_base64": logo_nova_b64,
                             }
                         ).execute()
                         limpar_cache_empresas()
@@ -3240,11 +3385,14 @@ def tela_empresas():
                         st.session_state.aviso_sucesso = f"Empresa '{nome.strip()}' cadastrada com sucesso!"
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Erro ao salvar empresa: {e}")
+                        if "logo_base64" in str(e):
+                            st.error("Rode o comando SQL no Supabase para criar a coluna `logo_base64` na tabela `vistorias_empresas`.")
+                        else:
+                            st.error(f"Erro ao salvar empresa: {e}")
 
 
 # =========================================================
-# TELA 5: FINANCEIRO
+# TELA 5: FINANCEIRO (COM LOGOS DAS EMPRESAS)
 # =========================================================
 def tela_financeiro():
     mostrar_aviso_pendente()
@@ -3310,6 +3458,7 @@ def tela_financeiro():
             media = soma / qtd if qtd else 0
             dia_p = dias_pgto.get(emp_nome, 15)
             badge_cls = "cv-badge-purple" if dia_p == 15 else "cv-badge-red"
+            titulo_emp_html = html_titulo_empresa(emp_nome, mapa_empresas)
             uid_pend = f"pend_{emp_nome}_{st.session_state.fin_ano}_{st.session_state.fin_mes}"
             aberto_p = st.session_state.fin_edit_aberto_id == uid_pend
 
@@ -3318,7 +3467,7 @@ def tela_financeiro():
                 <div class="cv-card">
                     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
                         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                            <span class="cv-card-title">🏢 {esc(emp_nome)}</span>
+                            {titulo_emp_html}
                             <span class="{badge_cls}">Paga dia {dia_p:02d}</span>
                         </div>
                         <span style="font-weight:800;font-size:1.12rem;color:var(--text);">{fmt_moeda(soma)}</span>
@@ -3369,6 +3518,7 @@ def tela_financeiro():
             media = soma / qtd if qtd else 0
             datas_rec = [x.get("data_recebimento") for x in lista_os if x.get("data_recebimento")]
             dt_label = fmt_data_curta(max(datas_rec)) if datas_rec else "-"
+            titulo_rec_html = html_titulo_empresa(emp_nome, mapa_empresas, titulo_cls="cv-card-green-title")
             uid_rec = f"rec_{emp_nome}_{st.session_state.fin_ano}_{st.session_state.fin_mes}"
             aberto_r = st.session_state.fin_edit_aberto_id == uid_rec
 
@@ -3377,7 +3527,7 @@ def tela_financeiro():
                 <div class="cv-card-green">
                     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
                         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                            <span class="cv-card-green-title">🏢 {esc(emp_nome)}</span>
+                            {titulo_rec_html}
                             <span class="cv-badge-green">✓ Recebido em {dt_label}</span>
                         </div>
                         <span class="cv-card-green-title">{fmt_moeda(soma)}</span>
@@ -3413,7 +3563,7 @@ def tela_financeiro():
 
 
 # =========================================================
-# TELA 6: PDF (COM BUSCA INTELIGENTE + OFERTA RASTREADOR)
+# TELA 6: PDF (COM BUSCA INTELIGENTE + LOGOS + OFERTA)
 # =========================================================
 def tela_pdf():
     mostrar_aviso_pendente()
@@ -3466,6 +3616,7 @@ def tela_pdf():
         badge = "cv-badge-green" if st_pg == "Recebido" else ("cv-badge-amber" if st_pg == "Sem Cobrança" else "cv-badge-purple")
         val_str = "Sem cobrança" if st_pg == "Sem Cobrança" else fmt_moeda(v.get("valor", 0))
         cli_txt = f"👤 {esc(v['cliente_nome'])} • " if v.get("cliente_nome") else ""
+        emp_inline = html_empresa_inline(v["empresa_nome"], mapa_empresas)
         end_txt = f"<div class='cv-card-sub'>📍 {esc(v['endereco'])}</div>" if v.get("endereco") else ""
         aberto = st.session_state.pdf_card_aberto_id == v["id"]
 
@@ -3484,7 +3635,7 @@ def tela_pdf():
                     <span class="{badge}">{esc(st_pg)}</span>
                 </div>
                 <div class="cv-card-sub">
-                    {cli_txt}🏢 {esc(v['empresa_nome'])} • 📅 {fmt_data_br(v['data_vistoria'])} • 🔧 {esc(v.get('tipo_vistoria', 'Cautelar'))} •
+                    {cli_txt}{emp_inline} • 📅 {fmt_data_br(v['data_vistoria'])} • 🔧 {esc(v.get('tipo_vistoria', 'Cautelar'))} •
                     <strong style="color:var(--text);">{val_str}</strong>
                 </div>
                 {end_txt}
