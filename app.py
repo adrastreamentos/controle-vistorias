@@ -1353,13 +1353,14 @@ def mensagem_oferta_rastreador(nome_cli: str, veiculo: str, placa: str, data_iso
     parte_placa = f" (Placa {placa_txt})" if placa_txt else ""
     data_txt = fmt_data_br(data_iso)
     return (
-        f"{saudacao} Realizamos a vistoria do seu veículo {veic_txt}{parte_placa} no dia {data_txt}.\n\n"
-        "Também trabalhamos com rastreamento veicular (AD Rastreamento Veicular) e, como você já protegeu "
-        "seu carro com o seguro do nosso parceiro, que tal agregar o rastreador para deixar a segurança completa? "
-        "Ele permite acompanhar a localização em tempo real pelo celular, trazendo muito mais tranquilidade no "
-        "dia a dia e agilidade em caso de imprevisto.\n\n"
-        "Por ser cliente do nosso parceiro, estamos com uma condição especial para você: apenas R$ 40,00 mensais, "
-        "com a primeira mensalidade só daqui a 30 dias.\n\n"
+        f"{saudacao} Aqui é David Allan, o vistoriador que realizou a vistoria do seu veículo "
+        f"{veic_txt}{parte_placa} no dia {data_txt}.\n\n"
+        "Além das vistorias, eu tenho uma empresa própria de rastreamento, a AD Rastreamento Veicular. "
+        "Como você já protegeu o seu veículo com o seguro, que tal agregar o rastreador para deixar a "
+        "segurança mais completa? Ele permite acompanhar a localização em tempo real pelo celular, "
+        "trazendo muito mais tranquilidade no dia a dia e agilidade em caso de imprevistos.\n\n"
+        "Por ser cliente do nosso parceiro, estamos com uma condição especial para você: apenas R$ 40,00 "
+        "mensais, com a primeira mensalidade só daqui a 30 dias.\n\n"
         "Se tiver interesse, é só responder por aqui que já agendamos a instalação!"
     )
 
